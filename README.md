@@ -1,6 +1,8 @@
 # NetGuard 🐾
 
 > Windows 家用版的情境式網路控管:每天 21:00 自動封鎖、07:00 自動恢復,中間用 Watchdog + Audit 雙保險防止小朋友破解。
+>
+> 📦 **GitHub repo**: <https://github.com/kennykou0928/netguard>
 
 ## 故事
 
@@ -49,8 +51,13 @@
 
 ### 1. 下載/clone 此 repo
 
-```powershell
-git clone <repo-url> netguard
+```bash
+# SSH (推薦,適合已設 GitHub SSH key 的使用者)
+git clone git@github.com:kennykou0928/netguard.git netguard
+
+# HTTPS (需要 GitHub Personal Access Token,適合沒設 SSH key 的使用者)
+git clone https://github.com/kennykou0928/netguard.git netguard
+
 cd netguard
 ```
 
