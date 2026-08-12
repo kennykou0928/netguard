@@ -1,0 +1,16 @@
+# 不要把 Windows 上的 log 檔案 commit 進來
+*.log
+*.log.*
+
+# 安裝目錄裡的敏感檔案也不要
+config.json
+
+# VS / PowerShell IDE 暫存
+.vs/
+*.suo
+*.user
+*.tmp
+
+# 其他
+.DS_Store
+Thumbs.db
