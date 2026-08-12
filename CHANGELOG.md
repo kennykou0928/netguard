@@ -1,5 +1,27 @@
 # Changelog
 
+## [v7] — 2026-08-12
+
+### 新增功能:20:50 睡前提醒
+
+讓小朋友在 21:00 鎖畫面前 10 分鐘收到系統訊息,給他們一些緩衝。
+
+- 🐶 `Warn-Bedtime.ps1` — 跳出「九點斷網 做好睡前該做的 關機 睡覺」系統訊息
+- 🐶 `SysNetSvc-4476` 排程任務 — `LogonType Interactive`,只在兒子帳號登入前台時觸發(同 Lock-Screen 21:00 的設計)
+- 🐾 `Setup-NetGuard.ps1` — 註冊 `SysNetSvc-4476`、檔案清單加 `Warn-Bedtime.ps1`、rollback 涵蓋新任務
+- 🐾 `Uninstall-NetGuard.ps1` — `stopOrder` 加 `SysNetSvc-4476`
+- 🐾 `NetGuard-Audit.ps1` — `expectedTasks` 加 `SysNetSvc-4476`,任務被刪會通知
+- 🐾 `README.md` — 同步反映 6 個任務、新增 Warn-Bedtime 說明
+- 🐾 同時修正 README 核心特性「20:55 自動鎖畫面」→ 21:00(代碼實際值)
+
+### 設計權衡
+
+- ⚠️ 沒登入 → 跳不出訊息,但 21:00 Lock-Screen 仍會強制鎖畫面,實際上沒差
+- ⚠️ 訊息可按「確定」關,無法強制停留(Windows 架構限制)
+- ⚠️ 訊息文字是寫死在腳本裡的,之後想改要改腳本內容 + 重跑 Setup
+
+---
+
 ## [v6] — 2026-08-12
 
 ### 全部 P3 修補完成 🎉

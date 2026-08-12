@@ -47,7 +47,7 @@ if (-not $kidUser) {
     exit 1
 }
 
-$sourceFiles = @("Block-Internet.ps1", "Unblock-Internet.ps1", "NetGuard-Watchdog.ps1", "NetGuard-Common.ps1", "Lock-Screen.ps1", "NetGuard-Audit.ps1")
+$sourceFiles = @("Block-Internet.ps1", "Unblock-Internet.ps1", "NetGuard-Watchdog.ps1", "NetGuard-Common.ps1", "Lock-Screen.ps1", "NetGuard-Audit.ps1", "Warn-Bedtime.ps1")
 
 $missing = @()
 foreach ($f in $sourceFiles) {
@@ -64,7 +64,8 @@ $taskUnblock = "SysNetSvc-4472"
 $taskWatchdog = "SysNetSvc-4473"
 $taskLock = "SysNetSvc-4474"
 $taskAudit = "SysNetSvc-4475"
-$allTasks = @($taskBlock, $taskUnblock, $taskWatchdog, $taskLock, $taskAudit)
+$taskWarn = "SysNetSvc-4476"
+$allTasks = @($taskBlock, $taskUnblock, $taskWatchdog, $taskLock, $taskAudit, $taskWarn)
 $allRules = @("NetGuard_Block_Outbound", "NetGuard_Block_Inbound")
 
 # 修正 #2:先拍照「執行本腳本之前」哪些 NetGuard 任務名稱就已經存在(例如你在重跑 Setup 做覆蓋安裝),
@@ -80,7 +81,7 @@ function Invoke-Rollback {
     param([string]$Reason)
     Write-Host ""
     Write-Host "安裝失敗($Reason),正在自動 rollback 這次新增的項目..."
-    foreach ($t in @($taskAudit, $taskWatchdog, $taskBlock, $taskUnblock, $taskLock)) {
+    foreach ($t in @($taskAudit, $taskWatchdog, $taskBlock, $taskUnblock, $taskLock, $taskWarn)) {
         if ($preExistingTasks -contains $t) {
             Write-Host " 跳過 '$t':這是本次執行前就已存在的任務,不動它"
             continue
@@ -211,8 +212,16 @@ $triggerAudit = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterva
 $okAudit = Register-NetGuardTask -TaskName $taskAudit -Action $actionAudit -Trigger $triggerAudit -Principal $principalSystem -Settings $settings
 if (-not $okAudit) { Invoke-Rollback -Reason "$taskAudit 建立失敗"; exit 1 }
 
+# 20:50 睡前提醒:同 Lock-Screen 的 Interactive 邏輯,只有兒子帳號登入前台時才會觸發,
+# 給他 10 分鐘緩衝看完訊息,21:00 Lock-Screen 才會強制鎖畫面
+$actionWarn = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$installDir\Warn-Bedtime.ps1`""
+$triggerWarn = New-ScheduledTaskTrigger -Daily -At 8:50PM
+$okWarn = Register-NetGuardTask -TaskName $taskWarn -Action $actionWarn -Trigger $triggerWarn -Principal $principalInteractive -Settings $settings
+if (-not $okWarn) { Invoke-Rollback -Reason "$taskWarn 建立失敗"; exit 1 }
+
 Write-Host ""
-Write-Host "安裝完成,已建立並驗證 5 個排程任務:"
+Write-Host "安裝完成,已建立並驗證 6 個排程任務:"
+Write-Host "  $taskWarn -> 20:50 跳出睡前提醒(給兒子 10 分鐘緩衝,僅在 $KidUsername 於前台登入時觸發)"
 Write-Host "  $taskBlock -> 21:00 封鎖網路"
 Write-Host "  $taskUnblock -> 07:00 恢復網路"
 Write-Host "  $taskWatchdog -> 每 1 分鐘檢查,防止手動關閉/竄改規則(異常時主動修復)"

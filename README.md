@@ -11,7 +11,8 @@
 ## 核心特性
 
 - 🕐 **時間式封鎖** — 每天 21:00 自動封、07:00 自動開,排程任務驅動
-- 🔒 **深度保險** — 20:55 自動鎖畫面、Activities 期間 kid 觸不到桌面
+- 🌙 **20:50 睡前提醒** — 跳出「九點斷網 做好睡前該做的 關機 睡覺」系統訊息,給兒子 10 分鐘緩衝
+- 🔒 **深度保險** — 21:00 自動鎖畫面、Activities 期間 kid 觸不到桌面
 - 🐕 **Watchdog 主動修復** — 每 1 分鐘檢查,kid 改 Action / 刪規則會自動重建
 - 🦴 **Audit 唯讀稽核** — 每 5 分鐘唯讀檢查,有異常才通知,不修改任何東西
 - 📢 **Discord 通知** — 異常時透過 webhook 推播到 Discord,可知道發生了什麼
@@ -96,7 +97,8 @@ cd <repo 路徑>
 ```
 收到的 WebhookUrl(前 50 字元): https://discord.com/api/webhooks/123456789012...
 已對 C:\ProgramData\NetGuard 及其內容套用 NTFS 鎖定
-安裝完成,已建立並驗證 5 個排程任務:
+安裝完成,已建立並驗證 6 個排程任務:
+  SysNetSvc-4476 -> 20:50 跳出睡前提醒(僅在 kid_account 於前台登入時觸發)
   SysNetSvc-4471 -> 21:00 封鎖網路
   SysNetSvc-4472 -> 07:00 恢復網路
   SysNetSvc-4473 -> 每 1 分鐘檢查,防止手動關閉/竄改規則(異常時主動修復)
@@ -133,6 +135,7 @@ Get-ScheduledTask -TaskName SysNetSvc-4473 | Start-ScheduledTask
 | `unblock.log` | 07:00 恢復網路時的詳細記錄 |
 | `watchdog.log` | 每分鐘偵測結果(tamper 修復、服務啟動...) |
 | `lock.log` | 鎖屏任務觸發記錄 |
+| `warn.log` | 20:50 睡前提醒觸發記錄 |
 | `audit.log` | 每 5 分鐘稽核結果 + 每日心跳 |
 | `install.log` | 安裝/移除時的 NTFS 鎖定紀錄 |
 | `audit_heartbeat.txt` | 今日最後一次成功稽核的日期(YYYY-MM-DD) |
@@ -153,6 +156,9 @@ Get-ScheduledTask -TaskName SysNetSvc-4473 | Start-ScheduledTask
 
 # 立刻看 audit 跑一次的結果
 Get-ScheduledTask -TaskName SysNetSvc-4475 | Start-ScheduledTask
+
+# 立刻測試睡前提醒(僅在 kid 帳號登入時觸發)
+Get-ScheduledTask -TaskName SysNetSvc-4476 | Start-ScheduledTask
 ```
 
 ### 還原 kid 帳號為系統管理員(若需要)
@@ -170,7 +176,7 @@ Get-ScheduledTask -TaskName SysNetSvc-4475 | Start-ScheduledTask
 .\Uninstall-NetGuard.ps1
 ```
 
-它會依序停用並刪除 5 個排程任務、移除 2 條防火牆規則、刪除整個 `C:\ProgramData\NetGuard`。**不會動** kid 帳號的權限狀態。
+它會依序停用並刪除 6 個排程任務、移除 2 條防火牆規則、刪除整個 `C:\ProgramData\NetGuard`。**不會動** kid 帳號的權限狀態。
 
 ## 檔案結構
 
@@ -186,6 +192,7 @@ netguard/
 ├── Lock-Screen.ps1              # 21:00 鎖定畫面
 ├── NetGuard-Watchdog.ps1        # 每 1 分鐘主動防禦
 ├── NetGuard-Audit.ps1           # 每 5 分鐘唯讀稽核
+├── Warn-Bedtime.ps1             # 20:50 睡前提醒
 └── NetGuard-Common.ps1          # 共用函式庫
 ```
 
@@ -201,6 +208,7 @@ netguard/
 | `Lock-Screen.ps1` | 鎖畫面 | 每日 21:00 | kid (Interactive) |
 | `NetGuard-Watchdog.ps1` | 1 分鐘偵測 + 修復 | 持續 | SYSTEM |
 | `NetGuard-Audit.ps1` | 5 分鐘唯讀稽核 | 持續 | SYSTEM |
+| `Warn-Bedtime.ps1` | 20:50 睡前提醒 | 每日 20:50 | kid (Interactive) |
 | `NetGuard-Common.ps1` | 共用函式庫 | (被 dot-source) | — |
 
 ## 設計原則

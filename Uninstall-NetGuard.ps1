@@ -12,7 +12,7 @@ $rules = @("NetGuard_Block_Outbound", "NetGuard_Block_Inbound")
 # audit (4475) 必須排在最前面停用:它是唯讀稽核,每 5 分鐘跑一次,
 # 如果卡在 watchdog/block/unblock 已經被刪但 audit 還在跑的空檔被觸發一次,
 # 會誤判「排程任務不存在」而發假警報。watchdog (4473) 其次,避免它在移除規則過程中把規則重建回來。
-$stopOrder = @("SysNetSvc-4475", "SysNetSvc-4473", "SysNetSvc-4471", "SysNetSvc-4472", "SysNetSvc-4474")
+$stopOrder = @("SysNetSvc-4475", "SysNetSvc-4473", "SysNetSvc-4471", "SysNetSvc-4472", "SysNetSvc-4474", "SysNetSvc-4476")
 
 $allOk = $true
 

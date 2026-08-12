@@ -54,7 +54,7 @@ if ($shouldBeBlocked) {
 }
 
 # 4. 排程任務本身是否都還在(kid 有沒有整組刪掉)
-$expectedTasks = @("SysNetSvc-4471", "SysNetSvc-4472", "SysNetSvc-4473", "SysNetSvc-4474")
+$expectedTasks = @("SysNetSvc-4471", "SysNetSvc-4472", "SysNetSvc-4473", "SysNetSvc-4474", "SysNetSvc-4476")
 foreach ($t in $expectedTasks) {
     if (-not (Get-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue)) {
         $anomalies += "排程任務 '$t' 不存在(可能被刪除)"
