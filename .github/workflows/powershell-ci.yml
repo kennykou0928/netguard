@@ -1,0 +1,60 @@
+name: PowerShell CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# 同一 branch 取消進行中的舊 run,避免佇列堆積
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 安裝 PSScriptAnalyzer
+        shell: pwsh
+        run: Install-Module -Name PSScriptAnalyzer -Force -SkipPublisherCheck -Scope CurrentUser
+
+      - name: 安裝 Pester 5
+        shell: pwsh
+        run: Install-Module -Name Pester -Force -SkipPublisherCheck -Scope CurrentUser
+
+      - name: Run PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Import-Module PSScriptAnalyzer
+          $results = Invoke-ScriptAnalyzer -Path . -Recurse
+          if ($results) {
+              Write-Host "::group::PSScriptAnalyzer findings"
+              $results | Format-Table Severity, RuleName, Line, Message -AutoSize | Out-String | Write-Host
+              Write-Host "::endgroup::"
+              $errors = $results | Where-Object { $_.Severity -eq 'Error' }
+              if ($errors) {
+                  Write-Host "::error::Found $($errors.Count) PSScriptAnalyzer error(s)"
+                  exit 1
+              }
+          } else {
+              Write-Host "PSScriptAnalyzer 0 個發現"
+          }
+
+      - name: Run Pester
+        shell: pwsh
+        run: |
+          Import-Module Pester
+          $config = New-PesterConfiguration
+          $config.Run.Path = "./tests"
+          $config.Output.Verbosity = "Detailed"
+          $r = Invoke-Pester -Configuration $config -PassThru
+          if ($r.FailedCount -gt 0) {
+              Write-Host "::error::Pester failed $($r.FailedCount) test(s)"
+              exit 1
+          }
