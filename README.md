@@ -62,25 +62,43 @@ git clone https://github.com/kennykou0928/netguard.git netguard
 cd netguard
 ```
 
-### 2. 確認 kid 帳號是「標準使用者」(很重要)
+### 2. ⚠️ 必讀:備援管理員帳號(只有 1 個帳號的機器必跑)
+
+降級 kid 帳號為標準使用者前,**本機必須至少還有 1 個啟用中的系統管理員帳號**。Windows 不允許移除最後一個 admin,且 `Set-AccountType.ps1` 會自動擋下這種嘗試。
+
+如果這台機器**目前只有 1 個帳號**(就是 kid 帳號),請先跑:
+
+```powershell
+# 以「系統管理員」身分(內建 Administrator 啟用,或目前登入的 admin)
+.\New-GuardianAdmin.ps1 -AccountName "SvcMaintUser"
+# 互動式輸入密碼(12 碼以上,不會顯示在螢幕)
+```
+
+這會建立備援 admin、加入 Administrators 群組、從歡迎畫面隱藏。冪等可重跑。
+
+**重要誠實聲明**:`HideUser` 只是「不在歡迎畫面顯示」,**Standard User 用 `Get-LocalUser` 還是看得到帳號名稱**。真正的安全邊界是**(a) 密碼強度 + (b) 你不告訴 kid 密碼**,不是帳號名稱保密。請用 14 碼以上亂碼密碼,千萬不要用 `parent` / `kenny` / `母親` 這類一眼就懂的命名。
+
+跑完後可以用 `.\Verify-AdminAccess.ps1 -KidUsername "kid_account"` 驗證備援帳號確實在 Administrators 群組。
+
+### 3. 確認 kid 帳號是「標準使用者」(很重要)
 
 ```powershell
 # 檢查狀態
 .\Set-AccountType.ps1 -Mode status -Username "kid_account"
 
-# 如果顯示 Administrator,降級為標準使用者
+# 如果顯示 Administrator,降級為標準使用者(腳本會自動確認還有其他 admin 才允許)
 .\Set-AccountType.ps1 -Mode standard -Username "kid_account"
 ```
 
 降級後**必須登出再登入**才會生效。
 
-### 3. 取得 Discord webhook URL(選用,但建議)
+### 4. 取得 Discord webhook URL(選用,但建議)
 
 1. Discord 頻道 → 設定 → 整合 → Webhook → 新 Webhook
 2. 複製 Webhook URL
 3. 測試貼到瀏覽器確認格式正確
 
-### 4. 執行 Setup
+### 5. 執行 Setup
 
 ```powershell
 # 以「系統管理員」身分開啟 PowerShell
@@ -106,7 +124,7 @@ cd <repo 路徑>
   SysNetSvc-4475 -> 每 5 分鐘唯讀稽核,異常只通知不修復
 ```
 
-### 5. 測試
+### 6. 測試
 
 立刻觸發 watchdog 確認運作(不影響封鎖時段):
 
@@ -187,6 +205,8 @@ netguard/
 ├── Setup-NetGuard.ps1           # 安裝(主入口)
 ├── Uninstall-NetGuard.ps1       # 移除
 ├── Set-AccountType.ps1          # 帳號權限管理(降級/升級/查詢)
+├── New-GuardianAdmin.ps1        # 建立備援管理員帳號(只有 1 個帳號的環境必跑)
+├── Verify-AdminAccess.ps1       # 驗證降權後 admin 路徑仍可用(結構化 PASS/FAIL)
 ├── Block-Internet.ps1           # 21:00 封鎖網路
 ├── Unblock-Internet.ps1         # 07:00 恢復網路
 ├── Lock-Screen.ps1              # 21:00 鎖定畫面
@@ -203,6 +223,8 @@ netguard/
 | `Setup-NetGuard.ps1` | 安裝入口 | 手動 | 系統管理員 |
 | `Uninstall-NetGuard.ps1` | 移除 | 手動 | 系統管理員 |
 | `Set-AccountType.ps1` | 帳號權限管理 | 手動 | 系統管理員 |
+| `New-GuardianAdmin.ps1` | 建立備援管理員帳號 | 手動 | 系統管理員 |
+| `Verify-AdminAccess.ps1` | 驗證降權後 admin 路徑 | 手動 | 任何(唯讀) |
 | `Block-Internet.ps1` | 執行封鎖 | 每日 21:00 | SYSTEM |
 | `Unblock-Internet.ps1` | 執行恢復 | 每日 07:00 | SYSTEM |
 | `Lock-Screen.ps1` | 鎖畫面 | 每日 21:00 | kid (Interactive) |

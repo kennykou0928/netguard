@@ -1,14 +1,14 @@
-# NetGuard-Watchdog.ps1 (v6)
+﻿# NetGuard-Watchdog.ps1  (v4)
 
 . "$PSScriptRoot\NetGuard-Common.ps1"
 
-$ruleNameOut = "NetGuard_Block_Outbound"
-$ruleNameIn = "NetGuard_Block_Inbound"
-$logPath = "C:\ProgramData\NetGuard\watchdog.log"
-$configPath = "C:\ProgramData\NetGuard\config.json"
+$ruleNameOut  = "NetGuard_Block_Outbound"
+$ruleNameIn   = "NetGuard_Block_Inbound"
+$logPath      = "C:\ProgramData\NetGuard\watchdog.log"
+$configPath   = "C:\ProgramData\NetGuard\config.json"
 
 $blockStartHour = 21
-$blockEndHour = 7
+$blockEndHour   = 7
 
 function Log { param([string]$m) Write-NetGuardLog -LogPath $logPath -Message $m }
 
@@ -24,15 +24,15 @@ if (-not (Ensure-FirewallProfileEnabled -LogPath $logPath)) {
     exit 1
 }
 
-$now = Get-Date
+$now  = Get-Date
 $hour = $now.Hour
 $shouldBeBlocked = ($hour -ge $blockStartHour) -or ($hour -lt $blockEndHour)
 
 $ruleOut = Get-NetFirewallRule -DisplayName $ruleNameOut -ErrorAction SilentlyContinue
-$ruleIn = Get-NetFirewallRule -DisplayName $ruleNameIn -ErrorAction SilentlyContinue
+$ruleIn  = Get-NetFirewallRule -DisplayName $ruleNameIn  -ErrorAction SilentlyContinue
 
 $outOk = $ruleOut -and ($ruleOut.Enabled.ToString() -eq "True") -and ($ruleOut.Action.ToString() -eq "Block")
-$inOk = $ruleIn -and ($ruleIn.Enabled.ToString() -eq "True") -and ($ruleIn.Action.ToString() -eq "Block")
+$inOk  = $ruleIn  -and ($ruleIn.Enabled.ToString()  -eq "True") -and ($ruleIn.Action.ToString()  -eq "Block")
 $currentlyBlocked = $outOk -and $inOk
 
 try {
@@ -41,10 +41,10 @@ try {
         # 所以「規則存在但 outOk/inOk 皆為真」這個分支邏輯上不可能發生,
         # 只需要兩種情況:規則不存在,或規則存在但狀態不對(停用/Action 不是 Block)
         $tamperType = if (-not $ruleOut -or -not $ruleIn) { "規則被刪除" }
-        else { "規則被停用或 Action 被改成非 Block" }
+                      else { "規則被停用或 Action 被改成非 Block" }
 
         if ($ruleOut) { $ruleOut | Remove-NetFirewallRule -ErrorAction SilentlyContinue }
-        if ($ruleIn) { $ruleIn | Remove-NetFirewallRule -ErrorAction SilentlyContinue }
+        if ($ruleIn)  { $ruleIn  | Remove-NetFirewallRule -ErrorAction SilentlyContinue }
 
         New-NetFirewallRule -Name $ruleNameOut -DisplayName $ruleNameOut `
             -Direction Outbound -Action Block -Enabled True -Profile Any -Protocol Any `
@@ -59,7 +59,7 @@ try {
     }
     elseif (-not $shouldBeBlocked -and $currentlyBlocked) {
         if ($ruleOut) { $ruleOut | Remove-NetFirewallRule -ErrorAction Stop }
-        if ($ruleIn) { $ruleIn | Remove-NetFirewallRule -ErrorAction Stop }
+        if ($ruleIn)  { $ruleIn  | Remove-NetFirewallRule -ErrorAction Stop }
         Log "非封鎖時段但規則仍存在,已移除(保險機制觸發)"
     }
     else {

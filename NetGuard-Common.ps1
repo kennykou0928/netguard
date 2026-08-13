@@ -1,6 +1,4 @@
-# NetGuard-Common.ps1 (v6)
-# 共用函式庫,被其他 4 個腳本 dot-source 載入。
-# 注意:每個函式都不會 exit 1,只 return $true/$false,由呼叫端決定如何處理。
+﻿# NetGuard-Common.ps1  (v4)
 
 $script:NetGuardLogMaxBytes = 1MB
 $script:NetGuardThrottleWindowMinutes = 5
@@ -28,7 +26,7 @@ function Write-NetGuardLog {
         }
     }
 
-    "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $Message" | Out-File -FilePath $LogPath -Append -Encoding utf8
+    "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')  $Message" | Out-File -FilePath $LogPath -Append -Encoding utf8
 }
 
 function Invoke-Icacls {
@@ -145,7 +143,7 @@ function Send-NetGuardWebhook {
         $throttleDir = Split-Path -Path $ConfigPath -Parent
         if (-not (Test-Path $throttleDir)) { New-Item -Path $throttleDir -ItemType Directory -Force | Out-Null }
 
-        $throttleFile = Join-Path $throttleDir "webhook_throttle_$EventKey.txt"
+        $throttleFile   = Join-Path $throttleDir "webhook_throttle_$EventKey.txt"
         $occurrenceFile = Join-Path $throttleDir "occurrence_$EventKey.txt"
         $now = Get-Date
 

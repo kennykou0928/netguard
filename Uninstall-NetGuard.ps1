@@ -1,4 +1,4 @@
-# Uninstall-NetGuard.ps1 (v6)
+﻿# Uninstall-NetGuard.ps1  (v4)
 
 $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -81,4 +81,4 @@ if ($allOk) {
     Write-Host "NetGuard 移除過程中有項目未能驗證成功,請檢查上方警告訊息並手動處理。"
 }
 Write-Host "提醒:若曾用 Set-AccountType.ps1 將帳號降級為標準使用者,此動作不會自動還原,"
-Write-Host "  需要的話請另外執行: .\Set-AccountType.ps1 -Mode admin -Username <帳號>"
+Write-Host "      需要的話請另外執行: .\Set-AccountType.ps1 -Mode admin -Username <帳號>"

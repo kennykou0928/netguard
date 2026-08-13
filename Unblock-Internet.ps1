@@ -1,10 +1,10 @@
-# Unblock-Internet.ps1 (v6)
+﻿# Unblock-Internet.ps1  (v4)
 
 . "$PSScriptRoot\NetGuard-Common.ps1"
 
 $ruleNameOut = "NetGuard_Block_Outbound"
-$ruleNameIn = "NetGuard_Block_Inbound"
-$logPath = "C:\ProgramData\NetGuard\unblock.log"
+$ruleNameIn  = "NetGuard_Block_Inbound"
+$logPath     = "C:\ProgramData\NetGuard\unblock.log"
 
 function Log { param([string]$m) Write-NetGuardLog -LogPath $logPath -Message $m }
 

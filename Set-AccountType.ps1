@@ -1,4 +1,4 @@
-# Set-AccountType.ps1 (v6)
+﻿# Set-AccountType.ps1  (v5)
 # 用途:管理本機帳號的「系統管理員 / 標準使用者」權限切換 + 帳號清單稽核。
 # 重要:此腳本「不會」自動還原 kid 帳號的權限,移除 NetGuard 時記得手動跑。
 
@@ -40,9 +40,9 @@ if ($Mode -eq "audit") {
             $cimWarnings += $u.Name
         }
         [PSCustomObject]@{
-            Name = $u.Name
-            Enabled = $u.Enabled
-            LastLogon = $lastUse
+            Name       = $u.Name
+            Enabled    = $u.Enabled
+            LastLogon  = $lastUse
         }
     }
 
@@ -76,6 +76,27 @@ function Test-IsAdmin {
     return [bool]$member
 }
 
+function Test-SafeToDowngrade {
+    # 核心防呆:在真的移除 $Username 的 admin 權限之前,先確認移除後
+    # 「仍有其他已啟用的 Administrator 帳號存在」,避免:
+    #   (a) Windows 直接拒絕(它本來就不准移除最後一個 admin),或
+    #   (b) 萬一某個 Windows 版本行為不同、真的降權成功了,結果全家沒人能再用 admin 權限
+    #       解 NetGuard、裝軟體、救援系統。
+    param($ExcludeSid)
+
+    $otherAdmins = Get-LocalGroupMember -Group "Administrators" -ErrorAction SilentlyContinue |
+        Where-Object { $_.SID -ne $ExcludeSid } |
+        ForEach-Object {
+            # Get-LocalGroupMember 回傳的成員不一定能直接查到 Enabled 狀態(可能是內建帳號或群組),
+            # 用 Get-LocalUser 反查,查不到就當作不是可用的本機使用者帳號,不列入安全名單
+            $sidValue = $_.SID.Value
+            $u = Get-LocalUser | Where-Object { $_.SID.Value -eq $sidValue }
+            if ($u -and $u.Enabled) { $u }
+        }
+
+    return [bool]$otherAdmins
+}
+
 switch ($Mode) {
     "status" {
         if (Test-IsAdmin -Sid $userSid) {
@@ -104,6 +125,17 @@ switch ($Mode) {
         if (-not (Test-IsAdmin -Sid $userSid)) {
             Write-Host "'$Username' 已經是標準使用者,無需變更"
         } else {
+            # 核心防呆(對應本次要修的漏洞):降權前先確認還有其他啟用中的 admin 帳號,
+            # 不然「唯一本機帳號」的機器降權後會被鎖死,家長也進不去
+            if (-not (Test-SafeToDowngrade -ExcludeSid $userSid)) {
+                Write-Host "拒絕降權:'$Username' 目前是本機唯一啟用中的系統管理員帳號。"
+                Write-Host "降權後將沒有任何可用的 admin 路徑,連你自己都無法解除 NetGuard、調整設定或安裝軟體。"
+                Write-Host ""
+                Write-Host "請先執行以下指令建立備援管理員帳號,再重跑本次降權:"
+                Write-Host "  .\New-GuardianAdmin.ps1 -AccountName ""<自訂帳號名稱,不要用 Admin/Parent/家長姓名>"""
+                exit 1
+            }
+
             try {
                 Remove-LocalGroupMember -Group "Administrators" -Member $userSid -ErrorAction Stop
                 Write-Host "已將 '$Username' 從 Administrators 群組移除,現為標準使用者"
@@ -111,6 +143,7 @@ switch ($Mode) {
                 Write-Host "  1. 需登出重新登入才會完全生效"
                 Write-Host "  2. 降級後請重新執行 Setup-NetGuard.ps1 以套用完整 NTFS 保護"
                 Write-Host "  3. 請確保他不知道你的系統管理員密碼"
+                Write-Host "  4. 已確認系統上仍有其他啟用中的管理員帳號可供你使用"
             } catch {
                 Write-Host "從 Administrators 群組移除失敗: $($_.Exception.Message)"
                 Write-Host "常見原因:這是本機唯一剩下的系統管理員帳號,Windows 不允許移除最後一個管理員"

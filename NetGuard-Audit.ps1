@@ -1,19 +1,19 @@
-# NetGuard-Audit.ps1 (v6)
+﻿# NetGuard-Audit.ps1
 # 由 SYSTEM 排程每 5 分鐘觸發。與 NetGuard-Watchdog.ps1 的差異:
-#  - Watchdog:偵測到封鎖時段內異常「立即修復」,是主動防禦手段
-#  - Audit :只檢查、只記錄、只通知,「絕不修改」任何規則或服務狀態,
-# 純粹讓你知道現在整體健康狀態,兩者用不同 EventKey 送 webhook,
-# 彼此的 throttle 互不影響,也不會搶著修同一個東西打架。
+#   - Watchdog:偵測到封鎖時段內異常「立即修復」,是主動防禦手段
+#   - Audit  :只檢查、只記錄、只通知,「絕不修改」任何規則或服務狀態,
+#             純粹讓你知道現在整體健康狀態,兩者用不同 EventKey 送 webhook,
+#             彼此的 throttle 互不影響,也不會搶著修同一個東西打架。
 
 . "$PSScriptRoot\NetGuard-Common.ps1"
 
 $ruleNameOut = "NetGuard_Block_Outbound"
-$ruleNameIn = "NetGuard_Block_Inbound"
-$logPath = "C:\ProgramData\NetGuard\audit.log"
-$configPath = "C:\ProgramData\NetGuard\config.json"
+$ruleNameIn  = "NetGuard_Block_Inbound"
+$logPath     = "C:\ProgramData\NetGuard\audit.log"
+$configPath  = "C:\ProgramData\NetGuard\config.json"
 
 $blockStartHour = 21
-$blockEndHour = 7
+$blockEndHour   = 7
 
 function Log { param([string]$m) Write-NetGuardLog -LogPath $logPath -Message $m }
 
@@ -39,15 +39,15 @@ try {
 }
 
 # 3. 規則狀態(只在應該封鎖的時段內檢查,非封鎖時段規則本來就該不在,不算異常)
-$now = Get-Date
+$now  = Get-Date
 $hour = $now.Hour
 $shouldBeBlocked = ($hour -ge $blockStartHour) -or ($hour -lt $blockEndHour)
 
 if ($shouldBeBlocked) {
     $ruleOut = Get-NetFirewallRule -DisplayName $ruleNameOut -ErrorAction SilentlyContinue
-    $ruleIn = Get-NetFirewallRule -DisplayName $ruleNameIn -ErrorAction SilentlyContinue
+    $ruleIn  = Get-NetFirewallRule -DisplayName $ruleNameIn  -ErrorAction SilentlyContinue
     $outOk = $ruleOut -and ($ruleOut.Enabled.ToString() -eq "True") -and ($ruleOut.Action.ToString() -eq "Block")
-    $inOk = $ruleIn -and ($ruleIn.Enabled.ToString() -eq "True") -and ($ruleIn.Action.ToString() -eq "Block")
+    $inOk  = $ruleIn  -and ($ruleIn.Enabled.ToString()  -eq "True") -and ($ruleIn.Action.ToString()  -eq "Block")
     if (-not ($outOk -and $inOk)) {
         $anomalies += "封鎖時段內防火牆規則異常(預期由 watchdog 於 1 分鐘內修復,若持續出現請檢查 watchdog.log)"
     }

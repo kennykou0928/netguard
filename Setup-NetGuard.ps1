@@ -1,6 +1,6 @@
-# Setup-NetGuard.ps1 (v6)
+﻿# Setup-NetGuard.ps1  (v4)
 # 請以「系統管理員」身分執行:
-# .\Setup-NetGuard.ps1 -KidUsername "帳號名稱" [-WebhookUrl "https://discord.com/api/webhooks/..."]
+#   .\Setup-NetGuard.ps1 -KidUsername "帳號名稱" [-WebhookUrl "https://discord.com/api/webhooks/..."]
 
 param(
     [Parameter(Mandatory=$true)]
@@ -47,6 +47,15 @@ if (-not $kidUser) {
     exit 1
 }
 
+# 軟性提醒(不中止安裝):如果這台機器只有 1 個本機帳號,
+# 之後用 Set-AccountType.ps1 降權會被安全檢查擋下來,先讓你知道要先跑 New-GuardianAdmin.ps1
+$totalAccounts = (Get-LocalUser | Measure-Object).Count
+if ($totalAccounts -le 1) {
+    Write-Host "提醒:偵測到本機目前只有 1 個帳號('$KidUsername')。"
+    Write-Host "      日後若要用 Set-AccountType.ps1 把 '$KidUsername' 降為標準使用者,"
+    Write-Host "      請先執行 New-GuardianAdmin.ps1 建立備援管理員帳號,否則降權會被拒絕。"
+}
+
 $sourceFiles = @("Block-Internet.ps1", "Unblock-Internet.ps1", "NetGuard-Watchdog.ps1", "NetGuard-Common.ps1", "Lock-Screen.ps1", "NetGuard-Audit.ps1", "Warn-Bedtime.ps1")
 
 $missing = @()
@@ -55,18 +64,18 @@ foreach ($f in $sourceFiles) {
 }
 if ($missing.Count -gt 0) {
     Write-Host "缺少以下檔案,請確認與 Setup-NetGuard.ps1 放在同一資料夾:"
-    $missing | ForEach-Object { Write-Host " - $_" }
+    $missing | ForEach-Object { Write-Host "  - $_" }
     exit 1
 }
 
-$taskBlock = "SysNetSvc-4471"
-$taskUnblock = "SysNetSvc-4472"
+$taskBlock    = "SysNetSvc-4471"
+$taskUnblock  = "SysNetSvc-4472"
 $taskWatchdog = "SysNetSvc-4473"
-$taskLock = "SysNetSvc-4474"
-$taskAudit = "SysNetSvc-4475"
-$taskWarn = "SysNetSvc-4476"
-$allTasks = @($taskBlock, $taskUnblock, $taskWatchdog, $taskLock, $taskAudit, $taskWarn)
-$allRules = @("NetGuard_Block_Outbound", "NetGuard_Block_Inbound")
+$taskLock     = "SysNetSvc-4474"
+$taskAudit    = "SysNetSvc-4475"
+$taskWarn     = "SysNetSvc-4476"
+$allTasks     = @($taskBlock, $taskUnblock, $taskWatchdog, $taskLock, $taskAudit, $taskWarn)
+$allRules     = @("NetGuard_Block_Outbound", "NetGuard_Block_Inbound")
 
 # 修正 #2:先拍照「執行本腳本之前」哪些 NetGuard 任務名稱就已經存在(例如你在重跑 Setup 做覆蓋安裝),
 # rollback 時只刪「這次新增」的,不要把上一次就裝好、正常運作中的任務也一起清掉
@@ -83,13 +92,13 @@ function Invoke-Rollback {
     Write-Host "安裝失敗($Reason),正在自動 rollback 這次新增的項目..."
     foreach ($t in @($taskAudit, $taskWatchdog, $taskBlock, $taskUnblock, $taskLock, $taskWarn)) {
         if ($preExistingTasks -contains $t) {
-            Write-Host " 跳過 '$t':這是本次執行前就已存在的任務,不動它"
+            Write-Host "  跳過 '$t':這是本次執行前就已存在的任務,不動它"
             continue
         }
         if (Get-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue) {
             try { Disable-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue | Out-Null } catch {}
             try { Unregister-ScheduledTask -TaskName $t -Confirm:$false -ErrorAction SilentlyContinue } catch {}
-            Write-Host " 已移除本次新增的任務: $t"
+            Write-Host "  已移除本次新增的任務: $t"
         }
     }
     # 防火牆規則沒有「這次新增 vs 原本就有」的區分需求(規則本身無害,不像任務會佔用帳號登入邏輯),
@@ -132,12 +141,12 @@ $kidSid = $kidUser.SID
 $isKidAdmin = [bool](Get-LocalGroupMember -Group "Administrators" -ErrorAction SilentlyContinue |
     Where-Object { $_.SID -eq $kidSid })
 $installLog = Join-Path $installDir "install.log"
-"$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') 安裝時 $KidUsername 權限狀態: $(if ($isKidAdmin) {'Administrator'} else {'Standard User'})" |
+"$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')  安裝時 $KidUsername 權限狀態: $(if ($isKidAdmin) {'Administrator'} else {'Standard User'})" |
     Out-File -FilePath $installLog -Append -Encoding utf8
 
 if ($isKidAdmin) {
     Write-Host "警告:'$KidUsername' 目前仍是系統管理員,NTFS 鎖定套了也無效,已略過。"
-    Write-Host " 降級後(Set-AccountType.ps1 -Mode standard)請重跑本腳本套用完整保護。"
+    Write-Host "         降級後(Set-AccountType.ps1 -Mode standard)請重跑本腳本套用完整保護。"
 } else {
     $folderLockOk = $true
     $folderLockOk = $folderLockOk -and (Invoke-Icacls -Arguments @($installDir, "/inheritance:r", "/T") -LogPath $setupLogPath -Description "資料夾移除繼承")
@@ -185,52 +194,51 @@ function Register-NetGuardTask {
 
 $principalSystem = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
 
-$actionBlock = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$installDir\Block-Internet.ps1`""
+$actionBlock  = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$installDir\Block-Internet.ps1`""
 $triggerBlock = New-ScheduledTaskTrigger -Daily -At 9:00PM
 $okBlock = Register-NetGuardTask -TaskName $taskBlock -Action $actionBlock -Trigger $triggerBlock -Principal $principalSystem -Settings $settings
 if (-not $okBlock) { Invoke-Rollback -Reason "$taskBlock 建立失敗"; exit 1 }
 
-$actionUnblock = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$installDir\Unblock-Internet.ps1`""
+$actionUnblock  = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$installDir\Unblock-Internet.ps1`""
 $triggerUnblock = New-ScheduledTaskTrigger -Daily -At 7:00AM
 $okUnblock = Register-NetGuardTask -TaskName $taskUnblock -Action $actionUnblock -Trigger $triggerUnblock -Principal $principalSystem -Settings $settings
 if (-not $okUnblock) { Invoke-Rollback -Reason "$taskUnblock 建立失敗"; exit 1 }
 
-$actionWatchdog = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$installDir\NetGuard-Watchdog.ps1`""
+$actionWatchdog  = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$installDir\NetGuard-Watchdog.ps1`""
 $triggerWatchdog = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration ([TimeSpan]::MaxValue)
 $okWatchdog = Register-NetGuardTask -TaskName $taskWatchdog -Action $actionWatchdog -Trigger $triggerWatchdog -Principal $principalSystem -Settings $settings
 if (-not $okWatchdog) { Invoke-Rollback -Reason "$taskWatchdog 建立失敗"; exit 1 }
 
 $principalInteractive = New-ScheduledTaskPrincipal -UserId $KidUsername -LogonType Interactive -RunLevel LeastPrivilege
-$actionLock = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$installDir\Lock-Screen.ps1`""
+$actionLock  = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$installDir\Lock-Screen.ps1`""
 $triggerLock = New-ScheduledTaskTrigger -Daily -At 9:00PM
 $okLock = Register-NetGuardTask -TaskName $taskLock -Action $actionLock -Trigger $triggerLock -Principal $principalInteractive -Settings $settings
 if (-not $okLock) { Invoke-Rollback -Reason "$taskLock 建立失敗"; exit 1 }
 
 # 修正 #7:主動稽核任務,唯讀、每 5 分鐘跑一次,跟 watchdog 用不同 EventKey,不會互相干擾
-$actionAudit = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$installDir\NetGuard-Audit.ps1`""
+$actionAudit  = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$installDir\NetGuard-Audit.ps1`""
 $triggerAudit = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration ([TimeSpan]::MaxValue)
 $okAudit = Register-NetGuardTask -TaskName $taskAudit -Action $actionAudit -Trigger $triggerAudit -Principal $principalSystem -Settings $settings
 if (-not $okAudit) { Invoke-Rollback -Reason "$taskAudit 建立失敗"; exit 1 }
 
-# 20:50 睡前提醒:同 Lock-Screen 的 Interactive 邏輯,只有兒子帳號登入前台時才會觸發,
-# 給他 10 分鐘緩衝看完訊息,21:00 Lock-Screen 才會強制鎖畫面
-$actionWarn = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$installDir\Warn-Bedtime.ps1`""
+# 20:50 睡前提醒(Interactive,同帳號、同邏輯,只是時間點更早、動作更溫和)
+$actionWarn  = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$installDir\Warn-Bedtime.ps1`""
 $triggerWarn = New-ScheduledTaskTrigger -Daily -At 8:50PM
 $okWarn = Register-NetGuardTask -TaskName $taskWarn -Action $actionWarn -Trigger $triggerWarn -Principal $principalInteractive -Settings $settings
 if (-not $okWarn) { Invoke-Rollback -Reason "$taskWarn 建立失敗"; exit 1 }
 
 Write-Host ""
 Write-Host "安裝完成,已建立並驗證 6 個排程任務:"
-Write-Host "  $taskWarn -> 20:50 跳出睡前提醒(給兒子 10 分鐘緩衝,僅在 $KidUsername 於前台登入時觸發)"
-Write-Host "  $taskBlock -> 21:00 封鎖網路"
-Write-Host "  $taskUnblock -> 07:00 恢復網路"
+Write-Host "  $taskWarn     -> 20:50 跳出睡前提醒訊息"
+Write-Host "  $taskBlock    -> 21:00 封鎖網路"
+Write-Host "  $taskUnblock  -> 07:00 恢復網路"
 Write-Host "  $taskWatchdog -> 每 1 分鐘檢查,防止手動關閉/竄改規則(異常時主動修復)"
-Write-Host "  $taskLock -> 21:00 鎖定畫面(僅在 $KidUsername 於前台登入時觸發)"
-Write-Host "  $taskAudit -> 每 5 分鐘唯讀稽核,異常只通知不修復"
+Write-Host "  $taskLock     -> 21:00 鎖定畫面(僅在 $KidUsername 於前台登入時觸發)"
+Write-Host "  $taskAudit    -> 每 5 分鐘唯讀稽核,異常只通知不修復"
 Write-Host ""
 Write-Host "注意(P2 #6,自我檢查限制):如果 $taskAudit 這個稽核任務本身也被刪掉了,"
-Write-Host "  不會有任何機制通知你——本系統沒有『稽核者也被稽核』的自我修復能力。"
-Write-Host "  建議偶爾自己手動執行: Get-ScheduledTask -TaskName $taskAudit 確認它還在。"
+Write-Host "      不會有任何機制通知你——本系統沒有『稽核者也被稽核』的自我修復能力。"
+Write-Host "      建議偶爾自己手動執行: Get-ScheduledTask -TaskName $taskAudit 確認它還在。"
 Write-Host ""
 Write-Host "已知限制:"
 Write-Host "  - Windows 安全模式開機不會執行一般排程任務,此為系統架構限制,無法用腳本解決"
