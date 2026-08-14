@@ -2,7 +2,7 @@
 # 用途:唯讀結構性驗證,對應 review 要求的「pytest 式」驗收。
 #       不會修改任何帳號/群組狀態,只檢查、只回報,適合在改動後每次重跑當驗收。
 # 用法:
-#   .\Verify-AdminAccess.ps1 -KidUsername "jonathan"
+#   .\Verify-AdminAccess.ps1 -KidUsername "kid_account"
 # Exit code:0 = 全部通過,1 = 有任一項失敗(方便串進其他自動化流程判斷)
 
 param(

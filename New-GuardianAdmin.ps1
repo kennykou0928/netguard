@@ -7,7 +7,7 @@
 #   HideUser 只會讓帳號不出現在「歡迎畫面 / 其他使用者」清單,
 #   Standard User 帳號依然可以用 `net user` 或 `Get-LocalUser` 在命令列看到帳號名稱。
 #   真正的安全邊界是「密碼強度」+「不告訴小孩密碼」,不是帳號名稱保密。
-#   請務必設定夠強的密碼,並且不要用「Admin」「Parent」「Kenny」這種一眼就懂的帳號名稱。
+#   請務必設定夠強的密碼,並且不要用「Admin」「Parent」這類完全等於角色名稱的帳號名稱——真正的防線是密碼強度,不是帳號名稱的隱晦程度。
 #
 # 用法:
 #   .\New-GuardianAdmin.ps1 -AccountName "SvcMaintUser"
@@ -43,8 +43,8 @@ if (-not $Password) {
         Write-Host "兩次輸入的密碼不一致,請重新執行。"
         exit 1
     }
-    if ($p1.Length -lt 12) {
-        Write-Host "密碼長度不足 12 碼,基於這個帳號是唯一的救援路徑,強烈建議加長。"
+    if ($p1.Length -lt 14) {
+        Write-Host "密碼長度不足 14 碼,基於這個帳號是唯一的救援路徑,強烈建議加長。"
         exit 1
     }
 }
