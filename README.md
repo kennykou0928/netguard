@@ -76,7 +76,7 @@ cd netguard
 
 這會建立備援 admin、加入 Administrators 群組、從歡迎畫面隱藏。冪等可重跑。
 
-**重要誠實聲明**:`HideUser` 只是「不在歡迎畫面顯示」,**Standard User 用 `Get-LocalUser` 還是看得到帳號名稱**。真正的安全邊界是**(a) 密碼強度 + (b) 你不告訴 kid 密碼**,不是帳號名稱保密。請用 14 碼以上亂碼密碼,千萬不要用 `parent` / `kenny` / `母親` 這類一眼就懂的命名。
+**重要誠實聲明**:`HideUser` 只是「不在歡迎畫面顯示」,**Standard User 用 `Get-LocalUser` 還是看得到帳號名稱**。真正的安全邊界是**(a) 密碼強度 + (b) 你不告訴 kid 密碼**,不是帳號名稱保密。請用密碼管理員產生 14 碼以上亂碼密碼,帳號名稱藏得再好也沒用,密碼夠強 + 嚴守不外洩才是真正的防線。
 
 跑完後可以用 `.\Verify-AdminAccess.ps1 -KidUsername "kid_account"` 驗證備援帳號確實在 Administrators 群組。
 
@@ -136,6 +136,20 @@ Get-ScheduledTask -TaskName SysNetSvc-4473 | Start-ScheduledTask
 觀察 Discord 是否收到任意一條通知(如果有的話代表 webhook 通了)。
 
 ## 日常使用
+
+### 查看帳號權限狀態(稽核模式)
+
+```powershell
+.\Set-AccountType.ps1 -Mode audit
+```
+
+會一次列出:
+
+- 🐾 目前 Administrators 群組成員
+- 🐾 所有本機帳號 + 啟用狀態 + 最後登入時間(用 `Win32_UserProfile.LastUseTime`,家用版有時讀不到,會標 `N/A` 並彙總警告)
+- 🐾 用來確認「kid 帳號已降級 + 還有可用 admin」這個安全前提沒被破壞
+
+適合定期跑一次(例如每次重開機後、或懷疑被改過時),看一下系統狀態是否符合預期。**只讀**,不會修改任何東西。
 
 ### 調整封鎖時間
 
