@@ -1,4 +1,4 @@
-﻿# Set-AccountType.ps1  (v5)
+﻿# Set-AccountType.ps1 (v5)
 # 用途:管理本機帳號的「系統管理員 / 標準使用者」權限切換 + 帳號清單稽核。
 # 重要:此腳本「不會」自動還原 kid 帳號的權限,移除 NetGuard 時記得手動跑。
 
@@ -40,9 +40,9 @@ if ($Mode -eq "audit") {
             $cimWarnings += $u.Name
         }
         [PSCustomObject]@{
-            Name       = $u.Name
-            Enabled    = $u.Enabled
-            LastLogon  = $lastUse
+            Name = $u.Name
+            Enabled = $u.Enabled
+            LastLogon = $lastUse
         }
     }
 
@@ -50,7 +50,7 @@ if ($Mode -eq "audit") {
 
     if ($cimWarnings.Count -gt 0) {
         Write-Host "警告:以下 $($cimWarnings.Count) 個帳號查詢最後登入時間時 CIM 查詢失敗,其 LastLogon 顯示 N/A 不代表從未登入: $($cimWarnings -join ', ')"
-        Write-Host "  (這是 Windows 家用版的已知限制,Win32_UserProfile.LastUseTime 在家用版經常讀不到)"
+        Write-Host " (這是 Windows 家用版的已知限制,Win32_UserProfile.LastUseTime 在家用版經常讀不到)"
     }
     exit 0
 }
@@ -79,9 +79,9 @@ function Test-IsAdmin {
 function Test-SafeToDowngrade {
     # 核心防呆:在真的移除 $Username 的 admin 權限之前,先確認移除後
     # 「仍有其他已啟用的 Administrator 帳號存在」,避免:
-    #   (a) Windows 直接拒絕(它本來就不准移除最後一個 admin),或
-    #   (b) 萬一某個 Windows 版本行為不同、真的降權成功了,結果全家沒人能再用 admin 權限
-    #       解 NetGuard、裝軟體、救援系統。
+    # (a) Windows 直接拒絕(它本來就不准移除最後一個 admin),或
+    # (b) 萬一某個 Windows 版本行為不同、真的降權成功了,結果全家沒人能再用 admin 權限
+    # 解 NetGuard、裝軟體、救援系統。
     param($ExcludeSid)
 
     $otherAdmins = Get-LocalGroupMember -Group "Administrators" -ErrorAction SilentlyContinue |
@@ -112,7 +112,7 @@ switch ($Mode) {
         } else {
             # 修正 #2:補 try/catch + -ErrorAction Stop,失敗時要看得到原因,不能默默不動作
             try {
-                Add-LocalGroupMember -Group "Administrators" -Member $userSid -ErrorAction Stop
+                Add-LocalGroupMember -Group "Administrators" -Member $userSid.Value -ErrorAction Stop
                 Write-Host "已將 '$Username' 加入 Administrators 群組"
             } catch {
                 Write-Host "加入 Administrators 群組失敗: $($_.Exception.Message)"
@@ -132,12 +132,12 @@ switch ($Mode) {
                 Write-Host "降權後將沒有任何可用的 admin 路徑,連你自己都無法解除 NetGuard、調整設定或安裝軟體。"
                 Write-Host ""
                 Write-Host "請先執行以下指令建立備援管理員帳號,再重跑本次降權:"
-                Write-Host "  .\New-GuardianAdmin.ps1 -AccountName ""<自訂帳號名稱,不要用 Admin/Parent/家長姓名>"""
+                Write-Host "  .\New-GuardianAdmin.ps1 -AccountName ""<你自己會記得的帳號名稱>"""
                 exit 1
             }
 
             try {
-                Remove-LocalGroupMember -Group "Administrators" -Member $userSid -ErrorAction Stop
+                Remove-LocalGroupMember -Group "Administrators" -Member $userSid.Value -ErrorAction Stop
                 Write-Host "已將 '$Username' 從 Administrators 群組移除,現為標準使用者"
                 Write-Host "提醒:"
                 Write-Host "  1. 需登出重新登入才會完全生效"

@@ -27,17 +27,13 @@ if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Adm
     exit 1
 }
 
-if ($AccountName -match '(?i)admin|parent|guardian|kenny|jonathan') {
-    Write-Host "警告:帳號名稱 '$AccountName' 語意上太容易被聯想成家長帳號,建議換一個不相關的名稱(例如跟其他排程任務一致的隱晦命名風格)。"
-    Write-Host "仍要繼續請重新執行並加上 -Force"
-    if (-not $PSBoundParameters.ContainsKey('Force')) {
-        # 這裡不強制擋(避免誤判合理名稱),只警告,3 秒讓你看到
-        Start-Sleep -Seconds 3
-    }
+if ($AccountName -match '(?i)^admin$|^administrator$|^parent$') {
+    Write-Host "提醒:'$AccountName' 這種完全等於角色名稱的帳號名,孩子在畫面上第一眼就會猜到用途。"
+    Write-Host "如果你會記得住,用你自己好記的名字完全沒問題——真正的防線是密碼強度,不是帳號名稱的隱晦程度。"
 }
 
 if (-not $Password) {
-    Write-Host "請輸入新管理員帳號的密碼(建議 14 碼以上,混合大小寫/數字/符號,且薑薑猜不到):"
+    Write-Host "請輸入新管理員帳號的密碼(建議 14 碼以上,混合大小寫/數字/符號,且孩子猜不到):"
     $Password = Read-Host -AsSecureString
     Write-Host "請再輸入一次以確認:"
     $confirm = Read-Host -AsSecureString
@@ -78,7 +74,7 @@ $isAdmin = [bool](Get-LocalGroupMember -Group "Administrators" -ErrorAction Sile
     Where-Object { $_.SID -eq $user.SID })
 if (-not $isAdmin) {
     try {
-        Add-LocalGroupMember -Group "Administrators" -Member $user.SID -ErrorAction Stop
+        Add-LocalGroupMember -Group "Administrators" -Member $user.SID.Value -ErrorAction Stop
         Write-Host "已將 '$AccountName' 加入 Administrators 群組"
     } catch {
         Write-Host "加入 Administrators 群組失敗: $($_.Exception.Message)"
@@ -88,7 +84,7 @@ if (-not $isAdmin) {
     Write-Host "'$AccountName' 已經是系統管理員"
 }
 
-# 從歡迎畫面隱藏(HideUser),僅止於「不要讓薑薑不小心點到」,不是真正的保密機制
+# 從歡迎畫面隱藏(HideUser),僅止於「不要讓孩子不小心點到」,不是真正的保密機制
 try {
     $regPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList"
     if (-not (Test-Path $regPath)) {
@@ -104,5 +100,6 @@ Write-Host ""
 Write-Host "完成。驗證方式:"
 Write-Host "  Get-LocalGroupMember -Group Administrators"
 Write-Host ""
-Write-Host "強烈建議:把 '$AccountName' 這個帳號名稱(不含密碼)記錄在你的密碼管理器備註,"
-Write-Host "密碼另外存在密碼管理器本體,不要寫在同一份文件或放實體紙條在薑薑找得到的地方。"
+Write-Host "建議:把 '$AccountName' 這個帳號名稱記在你自己會記得的地方(密碼管理器備註最好),"
+Write-Host "密碼用密碼管理器存,不要跟帳號名稱寫在同一份紙本文件上。"
+Write-Host "帳號名稱本身不是防線,你記不住反而讓這個備援帳號形同虛設,密碼夠強、孩子不知道密碼才是重點。"
