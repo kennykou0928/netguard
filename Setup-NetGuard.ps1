@@ -7,7 +7,13 @@ param(
     [string]$KidUsername,
 
     [Parameter(Mandatory=$false)]
-    [string]$WebhookUrl
+    [string]$WebhookUrl,
+
+    # 對應 GPT review P0 #1:預設拒絕在 kid 仍是 Administrator 的狀態下安裝,
+    # 因為 SYSTEM 排程任務執行的是 C:\ProgramData\NetGuard\*.ps1,
+    # 如果 kid 還是 admin,他可以直接改這些腳本內容,等於讓 SYSTEM 執行「他寫的程式碼」。
+    # 加這個參數只是保留「進階使用者想先裝、之後再降權」的彈性,預設值是 false(即 Hard Fail)。
+    [switch]$Force
 )
 
 $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
@@ -28,14 +34,17 @@ $setupLogPath = "C:\ProgramData\NetGuard\install.log"
 # 先 Trim 再驗證,並印出開頭片段方便你比對是否真的是你貼的那串
 if ($WebhookUrl) {
     $WebhookUrl = $WebhookUrl.Trim()
-    $preview = if ($WebhookUrl.Length -gt 50) { $WebhookUrl.Substring(0,50) + "..." } else { $WebhookUrl }
-    Write-Host "收到的 WebhookUrl(前 50 字元): $preview"
+
+    # 對應 GPT review nitpick:credential 的前綴沒有診斷價值,反而容易被使用者
+    # 貼進 issue/log/截圖裡意外外流,改成只確認「有收到」跟「格式驗證結果」
+    Write-Host "已收到 Discord Webhook URL(內容已隱藏)"
 
     if ($WebhookUrl -notmatch '^https://discord(app)?\.com/api/webhooks/\d+/[\w-]+$') {
         Write-Host "-WebhookUrl 格式看起來不像合法的 Discord webhook URL,請確認後重試。"
         Write-Host "正確格式範例: https://discord.com/api/webhooks/123456789012345678/AbCdEf..."
         exit 1
     }
+    Write-Host "Discord Webhook URL 格式驗證通過"
 }
 
 $installDir = "C:\ProgramData\NetGuard"
@@ -45,6 +54,39 @@ if (-not $kidUser) {
     Write-Host "找不到帳號 '$KidUsername',目前本機帳號:"
     Get-LocalUser | Select-Object Name | Format-Table -AutoSize
     exit 1
+}
+
+# 對應 GPT review P0 #1(最重要的一項):在做任何安裝動作之前先判斷 kid 是否仍是 Administrator。
+# 這不是一般 warning——後面所有 SYSTEM 排程任務執行的都是 C:\ProgramData\NetGuard\*.ps1,
+# 如果 kid 還是 admin,他可以直接改這些腳本內容,等於讓 SYSTEM 執行「他寫的程式碼」,
+# NTFS 鎖定完全無法防禦這件事(Administrators 群組本來就對這些檔案有完全控制權)。
+# 預設 Hard Fail,拒絕在不安全的狀態下安裝;-Force 保留給想先裝、之後再降權的進階使用者。
+$kidSid = $kidUser.SID
+$isKidAdmin = [bool](Get-LocalGroupMember -Group "Administrators" -ErrorAction SilentlyContinue |
+    Where-Object { $_.SID -eq $kidSid })
+$script:UnsafeInstall = $false
+
+if ($isKidAdmin) {
+    if (-not $Force) {
+        Write-Host "錯誤:'$KidUsername' 目前仍是系統管理員。"
+        Write-Host "NetGuard 無法在 Administrator 帳號下建立安全的 NTFS 邊界"
+        Write-Host "(SYSTEM 排程任務執行的腳本,admin 帳號本來就有完全控制權可以竄改)。"
+        Write-Host ""
+        Write-Host "請先執行:"
+        Write-Host "  .\Set-AccountType.ps1 -Mode standard -Username `"$KidUsername`""
+        Write-Host ""
+        Write-Host "如果你確定要先裝、之後再降權,請加上 -Force 參數重新執行本腳本,"
+        Write-Host "但在你完成降權並重跑本腳本之前,NetGuard 的所有保護都可被 '$KidUsername' 自行解除。"
+        exit 1
+    } else {
+        $script:UnsafeInstall = $true
+        Write-Host "======================================================================"
+        Write-Host "  警告:以 -Force 在 '$KidUsername' 仍是系統管理員的狀態下安裝"
+        Write-Host "  此次安裝結果將標記為 INSTALLATION INCOMPLETE / UNSAFE"
+        Write-Host "  排程任務會建立,但 NTFS 保護無效,'$KidUsername' 可自行竄改或刪除"
+        Write-Host "  請盡快執行 Set-AccountType.ps1 -Mode standard 後重跑本腳本補上保護"
+        Write-Host "======================================================================"
+    }
 }
 
 # 軟性提醒(不中止安裝):如果這台機器只有 1 個本機帳號,
@@ -124,28 +166,28 @@ if ($WebhookUrl) {
 
     # config.json 內含 webhook URL(等同一個可寫入你 Discord 頻道的密鑰),
     # 鎖成只有 SYSTEM/Administrators 可讀,標準使用者不行。
-    # 修正 P3:每個 icacls 呼叫都檢查是否真的成功,不再無條件 Out-Null
     $lockOk = $true
     $lockOk = $lockOk -and (Invoke-Icacls -Arguments @($configPath, "/inheritance:r") -LogPath $setupLogPath -Description "config.json 移除繼承")
     $lockOk = $lockOk -and (Invoke-Icacls -Arguments @($configPath, "/grant", "SYSTEM:F") -LogPath $setupLogPath -Description "config.json 授權 SYSTEM")
     $lockOk = $lockOk -and (Invoke-Icacls -Arguments @($configPath, "/grant", "Administrators:F") -LogPath $setupLogPath -Description "config.json 授權 Administrators")
 
+    # 對應 GPT review P0 #4:config.json 裡的 webhook URL 本質上是一把「可寫入你 Discord 頻道」的
+    # 憑證,ACL 鎖定失敗不能只是 warning 後繼續——那等於讓 kid 有機會讀到它、之後可以冒充 NetGuard 發訊息。
+    # 這裡直接視為安裝失敗:要嘛乾淨鎖住,要嘛整個 rollback,不要留下「webhook 能用但沒鎖好」的中間態。
     if ($lockOk) {
         Write-Host "已設定 Discord webhook 通知,並鎖定 config.json 權限"
     } else {
-        Write-Host "警告: config.json 權限鎖定過程中有步驟失敗,詳見 $setupLogPath。webhook 仍會運作,但檔案可能未完全鎖定。"
+        Invoke-Rollback -Reason "config.json 權限鎖定失敗,webhook URL 可能被 '$KidUsername' 讀取"
+        exit 1
     }
 }
 
-$kidSid = $kidUser.SID
-$isKidAdmin = [bool](Get-LocalGroupMember -Group "Administrators" -ErrorAction SilentlyContinue |
-    Where-Object { $_.SID -eq $kidSid })
 $installLog = Join-Path $installDir "install.log"
-"$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')  安裝時 $KidUsername 權限狀態: $(if ($isKidAdmin) {'Administrator'} else {'Standard User'})" |
+"$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')  安裝時 $KidUsername 權限狀態: $(if ($isKidAdmin) {'Administrator'} else {'Standard User'})$(if ($script:UnsafeInstall) {' (使用 -Force,UNSAFE)'})" |
     Out-File -FilePath $installLog -Append -Encoding utf8
 
 if ($isKidAdmin) {
-    Write-Host "警告:'$KidUsername' 目前仍是系統管理員,NTFS 鎖定套了也無效,已略過。"
+    Write-Host "警告:'$KidUsername' 目前仍是系統管理員,NTFS 鎖定套了也無效,已略過(-Force 模式)。"
     Write-Host "         降級後(Set-AccountType.ps1 -Mode standard)請重跑本腳本套用完整保護。"
 } else {
     $folderLockOk = $true
@@ -163,10 +205,15 @@ if ($isKidAdmin) {
     }
     # config.json 前面已經鎖過(只給 SYSTEM/Administrators),這裡不動它,
     # 否則會被這段迴圈的 Authenticated Users:RX 覆蓋掉
+
+    # 對應 GPT review P0 #2:NTFS 鎖定失敗不能只是 warning 後繼續建立 SYSTEM 排程任務——
+    # 那會產生「SYSTEM 執行 kid 可寫入的腳本」這種比 kid 是 admin 更難察覺的危險狀態
+    # (因為畫面上會顯示「已降為標準使用者」,看起來是安全的,實際上鎖定沒生效)。
     if ($folderLockOk) {
         Write-Host "已對 $installDir 及其內容套用 NTFS 鎖定"
     } else {
-        Write-Host "警告: NTFS 鎖定過程中有步驟失敗,詳見 $setupLogPath,建議手動用 icacls 檢查 $installDir 的權限"
+        Invoke-Rollback -Reason "NTFS 權限鎖定失敗,'$KidUsername' 可能仍可寫入 NetGuard 腳本"
+        exit 1
     }
 }
 
@@ -228,19 +275,37 @@ $okWarn = Register-NetGuardTask -TaskName $taskWarn -Action $actionWarn -Trigger
 if (-not $okWarn) { Invoke-Rollback -Reason "$taskWarn 建立失敗"; exit 1 }
 
 Write-Host ""
-Write-Host "安裝完成,已建立並驗證 6 個排程任務:"
+if ($script:UnsafeInstall) {
+    Write-Host "======================================================================"
+    Write-Host "  安裝完成,但狀態為:INSTALLATION INCOMPLETE / UNSAFE"
+    Write-Host "  原因:'$KidUsername' 仍是系統管理員,NTFS 保護未生效"
+    Write-Host "  排程任務都已建立,但 '$KidUsername' 目前可自行修改/刪除下列任何一項"
+    Write-Host "  請盡快執行:"
+    Write-Host "    .\Set-AccountType.ps1 -Mode standard -Username `"$KidUsername`""
+    Write-Host "    .\Setup-NetGuard.ps1 -KidUsername `"$KidUsername`" -Force"
+    Write-Host "  (第二次執行時 '$KidUsername' 若已是 Standard User,就不需要 -Force,也會補上 NTFS 保護)"
+    Write-Host "======================================================================"
+} else {
+    Write-Host "安裝完成,已建立並驗證 6 個排程任務:"
+}
 Write-Host "  $taskWarn     -> 20:50 跳出睡前提醒訊息"
 Write-Host "  $taskBlock    -> 21:00 封鎖網路"
 Write-Host "  $taskUnblock  -> 07:00 恢復網路"
-Write-Host "  $taskWatchdog -> 每 1 分鐘檢查,防止手動關閉/竄改規則(異常時主動修復)"
+Write-Host "  $taskWatchdog -> 每 1 分鐘檢查,防止手動關閉/竄改規則(異常時主動修復,並會補回被刪除的 $taskAudit)"
 Write-Host "  $taskLock     -> 21:00 鎖定畫面(僅在 $KidUsername 於前台登入時觸發)"
 Write-Host "  $taskAudit    -> 每 5 分鐘唯讀稽核,異常只通知不修復"
 Write-Host ""
-Write-Host "注意(P2 #6,自我檢查限制):如果 $taskAudit 這個稽核任務本身也被刪掉了,"
-Write-Host "      不會有任何機制通知你——本系統沒有『稽核者也被稽核』的自我修復能力。"
-Write-Host "      建議偶爾自己手動執行: Get-ScheduledTask -TaskName $taskAudit 確認它還在。"
+Write-Host "關於自我檢查(對應 GPT review P0):$taskWatchdog 跟 $taskAudit 會互相確認對方的排程任務是否還在——"
+Write-Host "      Audit 每 5 分鐘的稽核清單本來就包含 $taskWatchdog,Watchdog 這輪新增了反向檢查 $taskAudit。"
+Write-Host "      但修復能力不對稱:Watchdog 發現 $taskAudit 消失時會自動重新註冊補回,"
+Write-Host "      Audit 發現 $taskWatchdog 消失時只會發送通知、不會自動重建"
+Write-Host "      (這是刻意設計——Audit 對自己的定位是『絕不修改任何規則或服務狀態』,只檢查與通知)。"
+Write-Host "      這降低了『兩個都被同時刪掉才會失效』的風險,但仍不是理論上完美的解法,"
+Write-Host "      建議偶爾自己手動執行: Get-ScheduledTask -TaskName $taskAudit,$taskWatchdog 確認都還在。"
 Write-Host ""
 Write-Host "已知限制:"
 Write-Host "  - Windows 安全模式開機不會執行一般排程任務,此為系統架構限制,無法用腳本解決"
 Write-Host "  - 只要 $KidUsername 仍是系統管理員,他理論上可在工作排程器中找到並停用/刪除以上任務"
+Write-Host "  - Block-Internet.ps1 建立的是全機層級的防火牆規則(Any Profile),不是只針對 $KidUsername 帳號,"
+Write-Host "    這台機器上其他需要夜間網路的服務(Windows Update、備份、遠端管理等)在封鎖時段內也會一併受影響"
 Write-Host "  - 若要移除,請執行 Uninstall-NetGuard.ps1"
