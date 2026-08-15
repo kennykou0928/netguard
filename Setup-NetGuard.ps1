@@ -128,6 +128,16 @@ foreach ($t in $allTasks) {
     }
 }
 
+# 對應 GPT review 第二輪 P0-2:防火牆規則比照 Task 的做法,一樣先拍照「執行前是否已存在」。
+# 舊版註解寫「規則本身無害」是不夠安全的假設——Setup 明確支援重跑覆蓋安裝,
+# 如果 rollback 無差別刪掉所有 NetGuard 規則,會連上一次部署好、正常運作中的規則也一併砍掉。
+$preExistingRules = @()
+foreach ($r in $allRules) {
+    if (Get-NetFirewallRule -DisplayName $r -ErrorAction SilentlyContinue) {
+        $preExistingRules += $r
+    }
+}
+
 function Invoke-Rollback {
     param([string]$Reason)
     Write-Host ""
@@ -143,14 +153,49 @@ function Invoke-Rollback {
             Write-Host "  已移除本次新增的任務: $t"
         }
     }
-    # 防火牆規則沒有「這次新增 vs 原本就有」的區分需求(規則本身無害,不像任務會佔用帳號登入邏輯),
-    # 但為求乾淨,若本次安裝流程中有建立就一併清掉
+
     foreach ($r in $allRules) {
+        if ($preExistingRules -contains $r) {
+            Write-Host "  跳過防火牆規則 '$r':這是本次執行前就已存在的規則,不動它"
+            continue
+        }
         $rule = Get-NetFirewallRule -DisplayName $r -ErrorAction SilentlyContinue
-        if ($rule) { $rule | Remove-NetFirewallRule -ErrorAction SilentlyContinue }
+        if ($rule) {
+            $rule | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+            Write-Host "  已移除本次新增的防火牆規則: $r"
+        }
     }
+
+    # 對應 GPT review 第二輪 P0-1(這輪最重要的一項):舊版 rollback 只清 Task/Rule,
+    # 完全沒處理已經寫入磁碟的 config.json(內含 webhook URL,等同一把 Discord 頻道憑證)
+    # 跟複製過去的 .ps1 腳本,導致「安裝失敗」的部署反而在磁碟上留下敏感資訊跟半套檔案。
+    if (-not $installDirExistedBefore) {
+        # 這次是全新安裝(資料夾原本不存在),裡面所有東西都是這次建立的,整個刪乾淨最安全
+        if (Test-Path $installDir) {
+            try {
+                Remove-Item -Path $installDir -Recurse -Force -ErrorAction Stop
+                Write-Host "  已移除本次新增的安裝目錄(含 config.json、腳本、log): $installDir"
+            } catch {
+                Write-Host "  警告:移除安裝目錄失敗,可能仍留有 config.json 等敏感檔案,請手動檢查並刪除 $installDir : $($_.Exception.Message)"
+            }
+        }
+    } elseif (-not $configJsonExistedBefore -and (Test-Path $configPath)) {
+        # 這次是覆蓋安裝(資料夾原本就存在,可能是既有正常部署),不能整個資料夾砍掉,
+        # 但至少要把「這次新建立」的 config.json 清掉,不留下 webhook 憑證
+        try {
+            Remove-Item -Path $configPath -Force -ErrorAction Stop
+            Write-Host "  已移除本次新增的 config.json(webhook 憑證)"
+        } catch {
+            Write-Host "  警告:移除 config.json 失敗,可能仍留有 webhook 憑證,請手動檢查並刪除 $configPath : $($_.Exception.Message)"
+        }
+    }
+
     Write-Host "Rollback 完成。請排除錯誤原因後重新執行。"
 }
+
+$installDirExistedBefore = Test-Path $installDir
+$configPath = Join-Path $installDir "config.json"
+$configJsonExistedBefore = Test-Path $configPath
 
 if (-not (Test-Path $installDir)) {
     New-Item -Path $installDir -ItemType Directory -Force | Out-Null
@@ -161,7 +206,6 @@ foreach ($f in $sourceFiles) {
 }
 
 if ($WebhookUrl) {
-    $configPath = Join-Path $installDir "config.json"
     @{ WebhookUrl = $WebhookUrl } | ConvertTo-Json | Out-File -FilePath $configPath -Encoding utf8 -Force
 
     # config.json 內含 webhook URL(等同一個可寫入你 Discord 頻道的密鑰),

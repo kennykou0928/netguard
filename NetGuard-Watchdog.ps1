@@ -12,6 +12,22 @@ $blockEndHour   = 7
 
 function Log { param([string]$m) Write-NetGuardLog -LogPath $logPath -Message $m }
 
+# 對應 GPT review 第二輪 P1:原本只驗證 Enabled + Action 兩個屬性,
+# 如果攻擊者用 Set-NetFirewallRule 把 Profile 從 Any 改成 Domain(規則本身還是 Enabled=True、Action=Block,
+# 但只在網域網路生效,在家用的 Private/Public 網路下完全不會擋),舊邏輯會誤判成「正常」。
+# 改成完整比對 Enabled / Action / Direction / Profile / Protocol 五個屬性,才是真正的「預期狀態」。
+function Test-NetGuardRuleState {
+    param($Rule, [string]$ExpectedDirection)
+    if (-not $Rule) { return $false }
+    return (
+        $Rule.Enabled.ToString()   -eq "True" -and
+        $Rule.Action.ToString()    -eq "Block" -and
+        $Rule.Direction.ToString() -eq $ExpectedDirection -and
+        $Rule.Profile.ToString()   -eq "Any" -and
+        $Rule.Protocol.ToString()  -eq "Any"
+    )
+}
+
 # watchdog 本身也要先確認防火牆服務活著、且三個 profile 都啟用,不然重建規則也是白做
 if (-not (Ensure-FirewallServiceRunning -LogPath $logPath)) {
     Send-NetGuardWebhook -ConfigPath $configPath -EventKey "firewall_service_down" `
@@ -31,27 +47,27 @@ $shouldBeBlocked = ($hour -ge $blockStartHour) -or ($hour -lt $blockEndHour)
 $ruleOut = Get-NetFirewallRule -DisplayName $ruleNameOut -ErrorAction SilentlyContinue
 $ruleIn  = Get-NetFirewallRule -DisplayName $ruleNameIn  -ErrorAction SilentlyContinue
 
-$outOk = $ruleOut -and ($ruleOut.Enabled.ToString() -eq "True") -and ($ruleOut.Action.ToString() -eq "Block")
-$inOk  = $ruleIn  -and ($ruleIn.Enabled.ToString()  -eq "True") -and ($ruleIn.Action.ToString()  -eq "Block")
+$outOk = Test-NetGuardRuleState -Rule $ruleOut -ExpectedDirection "Outbound"
+$inOk  = Test-NetGuardRuleState -Rule $ruleIn  -ExpectedDirection "Inbound"
 $currentlyBlocked = $outOk -and $inOk
 
 try {
     if ($shouldBeBlocked -and -not $currentlyBlocked) {
         $tamperType = if (-not $ruleOut -or -not $ruleIn) { "規則被刪除" }
-                      else { "規則被停用或 Action 被改成非 Block" }
+                      else { "規則被停用,或 Action/Direction/Profile/Protocol 其中一項被竄改" }
 
-        # 對應 GPT review should-fix:原本是「先 Remove 兩條規則、再 New 兩條規則」,
-        # 中間存在短暫的完全不封鎖空窗。改成:規則存在但狀態不對時用 Set-NetFirewallRule
-        # 原地修正(單一 atomic 呼叫,沒有空窗);只有規則整個被刪除時才需要 New-NetFirewallRule。
+        # 規則存在但狀態不對時用 Set-NetFirewallRule 原地修正(單一 atomic 呼叫,沒有空窗);
+        # 這次把 Direction/Profile/Protocol 也一併寫回預期值,不再只補 Enabled/Action 兩項,
+        # 避免攻擊者透過改 Profile 之類的方式讓規則「看起來是 Block」但實際上沒真的擋住。
         if ($ruleOut) {
-            $ruleOut | Set-NetFirewallRule -Enabled True -Action Block -ErrorAction Stop
+            $ruleOut | Set-NetFirewallRule -Enabled True -Action Block -Direction Outbound -Profile Any -Protocol Any -ErrorAction Stop
         } else {
             New-NetFirewallRule -Name $ruleNameOut -DisplayName $ruleNameOut `
                 -Direction Outbound -Action Block -Enabled True -Profile Any -Protocol Any `
                 -ErrorAction Stop | Out-Null
         }
         if ($ruleIn) {
-            $ruleIn | Set-NetFirewallRule -Enabled True -Action Block -ErrorAction Stop
+            $ruleIn | Set-NetFirewallRule -Enabled True -Action Block -Direction Inbound -Profile Any -Protocol Any -ErrorAction Stop
         } else {
             New-NetFirewallRule -Name $ruleNameIn -DisplayName $ruleNameIn `
                 -Direction Inbound -Action Block -Enabled True -Profile Any -Protocol Any `
