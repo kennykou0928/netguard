@@ -50,6 +50,44 @@ function Invoke-Icacls {
     }
 }
 
+function Test-NetGuardAclDesiredState {
+    # 對應 GPT review 第三輪 P1:過去的做法是「一直 /grant」,只保證這幾個 ACE 存在,
+    # 不保證「最終只剩這幾個 ACE」——如果檔案先前曾經被設定過其他授權(例如舊版部署留下的、
+    # 或重跑 Setup 覆蓋安裝時殘留的),/inheritance:r + /grant 並不會把那些舊授權清掉。
+    # 這個函式在 icacls 操作完成後讀取實際 ACL,驗證「明確授權(非繼承)的對象」
+    # 剛好等於預期清單,不多也不少,才算是真正的 desired state,而不是只驗證 icacls 沒報錯。
+    param(
+        [Parameter(Mandatory=$true)][string]$Path,
+        [Parameter(Mandatory=$true)][string[]]$AllowedPrincipals,
+        [Parameter(Mandatory=$true)][string]$LogPath
+    )
+    try {
+        $acl = Get-Acl -Path $Path -ErrorAction Stop
+        $violations = @()
+        foreach ($rule in $acl.Access) {
+            if ($rule.IsInherited) { continue }
+            if ($rule.AccessControlType -ne "Allow") { continue }
+
+            $shortName = ($rule.IdentityReference.Value -split '\\')[-1]
+            $isAllowed = $false
+            foreach ($p in $AllowedPrincipals) {
+                if ($shortName -ieq $p) { $isAllowed = $true; break }
+            }
+            if (-not $isAllowed) {
+                $violations += "$($rule.IdentityReference.Value) ($($rule.FileSystemRights))"
+            }
+        }
+        if ($violations.Count -gt 0) {
+            Write-NetGuardLog -LogPath $LogPath -Message "ACL desired-state 驗證失敗,'$Path' 上偵測到非預期的授權對象: $($violations -join '; ')"
+            return $false
+        }
+        return $true
+    } catch {
+        Write-NetGuardLog -LogPath $LogPath -Message "ACL desired-state 驗證時發生例外: $($_.Exception.Message)"
+        return $false
+    }
+}
+
 function Ensure-FirewallServiceRunning {
     # 修正 #1:kid 若直接把 Windows Firewall 服務 (mpssvc) 停掉,
     # 所有 Get/New-NetFirewallRule 呼叫會「看似」正常執行但實際不生效或報錯不明顯。

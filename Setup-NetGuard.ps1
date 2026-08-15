@@ -22,7 +22,83 @@ if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Adm
     exit 1
 }
 
-# 載入共用函式(Invoke-Icacls / Write-NetGuardLog 等),Setup 自己也需要用到
+# 對應 GPT review 第三輪 P0(目前最重要的一項):在載入/複製任何 repo 內的檔案之前,
+# 先確認這個 repo 所在的資料夾本身是可信的。
+# 這個檢查刻意只用 PowerShell 內建 cmdlet(Get-Acl / Test-Path / Get-LocalUser),
+# 完全不依賴 NetGuard-Common.ps1 或任何其他 repo 內的檔案——因為如果連這個檢查本身
+# 都靠 dot-source 一個可能已被竄改的檔案來完成,等於還沒站穩就先倒了。
+#
+# 威脅模型:如果 $KidUsername 目前(或曾經)是系統管理員,他對整台機器都有完全控制權,
+# 包含這個 repo 資料夾在內。如果家長在這個資料夾裡執行本腳本,等於是「以系統管理員身分
+# 執行小孩可能已經改過的程式碼」。NTFS 鎖定只能保護『安裝後』的 C:\ProgramData\NetGuard,
+# 完全無法回頭保護『安裝前』家長電腦上這個 repo 資料夾本身。
+function Test-NetGuardSourceTrust {
+    param(
+        [Parameter(Mandatory=$true)][string]$Path,
+        [Parameter(Mandatory=$true)][string]$KidUsername
+    )
+    $reasons = @()
+
+    # 檢查 1:路徑本身是否位於 kid 的使用者個人資料夾底下(每個使用者對自己的
+    # C:\Users\<帳號> 資料夾預設就有完全控制權,即使他現在是 Standard User 也一樣)
+    if ($Path -match [regex]::Escape("\Users\$KidUsername\") -or $Path -match [regex]::Escape("\Users\$KidUsername")) {
+        $reasons += "資料夾位於 '$KidUsername' 的使用者個人資料夾內(C:\Users\$KidUsername\...),該帳號對自己的個人資料夾預設就有完全控制權"
+    }
+
+    # 檢查 2:實際檢查資料夾 ACL,看有沒有授予 kid 帳號、或 Everyone/Users/
+    # Authenticated Users 這類廣泛群組 Write/Modify/FullControl 權限
+    try {
+        $kidUserObj = Get-LocalUser -Name $KidUsername -ErrorAction SilentlyContinue
+        $acl = Get-Acl -Path $Path -ErrorAction Stop
+        $riskyNames = @("Everyone", "Users", "Authenticated Users", $KidUsername)
+
+        foreach ($rule in $acl.Access) {
+            if ($rule.AccessControlType -ne "Allow") { continue }
+            if ($rule.FileSystemRights -notmatch "Write|Modify|FullControl") { continue }
+
+            $idValue = $rule.IdentityReference.Value
+            $idShortName = ($idValue -split '\\')[-1]
+
+            $isRisky = $riskyNames -contains $idShortName
+            if (-not $isRisky -and $kidUserObj) {
+                try {
+                    if ($idValue -eq $kidUserObj.SID.Value) { $isRisky = $true }
+                } catch {}
+            }
+
+            if ($isRisky) {
+                $reasons += "資料夾 ACL 授予 '$idValue' $($rule.FileSystemRights) 權限"
+            }
+        }
+    } catch {
+        $reasons += "無法讀取資料夾 ACL 進行驗證: $($_.Exception.Message)"
+    }
+
+    return $reasons
+}
+
+$sourceTrustIssues = Test-NetGuardSourceTrust -Path $PSScriptRoot -KidUsername $KidUsername
+if ($sourceTrustIssues.Count -gt 0) {
+    Write-Host "錯誤:安裝來源資料夾不可信,拒絕繼續安裝。"
+    Write-Host "資料夾: $PSScriptRoot"
+    Write-Host ""
+    Write-Host "偵測到以下問題:"
+    foreach ($reason in $sourceTrustIssues) {
+        Write-Host "  - $reason"
+    }
+    Write-Host ""
+    Write-Host "原因:如果 '$KidUsername' 對這個資料夾有寫入權限,他可以在你執行本腳本之前"
+    Write-Host "先修改裡面任何一支 .ps1(例如 NetGuard-Common.ps1、NetGuard-Watchdog.ps1),"
+    Write-Host "而你是以系統管理員身分執行,等於直接執行了他寫的程式碼。"
+    Write-Host ""
+    Write-Host "請將整個 repo 資料夾搬到只有系統管理員帳號能寫入的位置"
+    Write-Host "(例如你自己的系統管理員帳號個人資料夾,或另外建立一個一般帳號存取不到的路徑),"
+    Write-Host "確認搬移後 '$KidUsername' 對新位置沒有寫入權限,再重新執行本腳本。"
+    exit 1
+}
+
+# 載入共用函式(Invoke-Icacls / Write-NetGuardLog 等),Setup 自己也需要用到。
+# 這裡才第一次觸碰 repo 內的檔案,此時上面的信任邊界檢查已經通過。
 if (-not (Test-Path (Join-Path $PSScriptRoot "NetGuard-Common.ps1"))) {
     Write-Host "找不到 NetGuard-Common.ps1,請確認與 Setup-NetGuard.ps1 放在同一資料夾。"
     exit 1
@@ -210,18 +286,25 @@ if ($WebhookUrl) {
 
     # config.json 內含 webhook URL(等同一個可寫入你 Discord 頻道的密鑰),
     # 鎖成只有 SYSTEM/Administrators 可讀,標準使用者不行。
+    #
+    # 對應 GPT review 第三輪 P1:原本只有「移除繼承 + 授予」,如果這個檔案位置先前
+    # 曾經被設過其他授權(例如覆蓋安裝的情境),那些舊授權不會被清掉。改成:
+    # 先明確移除幾個常見的危險授權對象、再授予精確清單、最後讀取 ACL 驗證「剛好只有
+    # 這幾個對象」,而不是只驗證 icacls 指令有沒有跑成功。
     $lockOk = $true
     $lockOk = $lockOk -and (Invoke-Icacls -Arguments @($configPath, "/inheritance:r") -LogPath $setupLogPath -Description "config.json 移除繼承")
+    $lockOk = $lockOk -and (Invoke-Icacls -Arguments @($configPath, "/remove:g", "Users", "Authenticated Users", "Everyone", $KidUsername) -LogPath $setupLogPath -Description "config.json 移除既有危險授權")
     $lockOk = $lockOk -and (Invoke-Icacls -Arguments @($configPath, "/grant", "SYSTEM:F") -LogPath $setupLogPath -Description "config.json 授權 SYSTEM")
     $lockOk = $lockOk -and (Invoke-Icacls -Arguments @($configPath, "/grant", "Administrators:F") -LogPath $setupLogPath -Description "config.json 授權 Administrators")
+    $lockOk = $lockOk -and (Test-NetGuardAclDesiredState -Path $configPath -AllowedPrincipals @("SYSTEM", "Administrators") -LogPath $setupLogPath)
 
     # 對應 GPT review P0 #4:config.json 裡的 webhook URL 本質上是一把「可寫入你 Discord 頻道」的
     # 憑證,ACL 鎖定失敗不能只是 warning 後繼續——那等於讓 kid 有機會讀到它、之後可以冒充 NetGuard 發訊息。
     # 這裡直接視為安裝失敗:要嘛乾淨鎖住,要嘛整個 rollback,不要留下「webhook 能用但沒鎖好」的中間態。
     if ($lockOk) {
-        Write-Host "已設定 Discord webhook 通知,並鎖定 config.json 權限"
+        Write-Host "已設定 Discord webhook 通知,並鎖定 config.json 權限(已驗證 ACL 為精確狀態)"
     } else {
-        Invoke-Rollback -Reason "config.json 權限鎖定失敗,webhook URL 可能被 '$KidUsername' 讀取"
+        Invoke-Rollback -Reason "config.json 權限鎖定失敗或 ACL 驗證未通過,webhook URL 可能被 '$KidUsername' 讀取"
         exit 1
     }
 }
@@ -234,18 +317,24 @@ if ($isKidAdmin) {
     Write-Host "警告:'$KidUsername' 目前仍是系統管理員,NTFS 鎖定套了也無效,已略過(-Force 模式)。"
     Write-Host "         降級後(Set-AccountType.ps1 -Mode standard)請重跑本腳本套用完整保護。"
 } else {
+    # 對應 GPT review 第三輪 P1:比照 config.json 的做法,先清掉可能殘留的舊授權,
+    # 再授予精確清單,最後驗證 ACL 剛好只有這幾個對象,不是「反正 grant 了就當作沒事」。
     $folderLockOk = $true
     $folderLockOk = $folderLockOk -and (Invoke-Icacls -Arguments @($installDir, "/inheritance:r", "/T") -LogPath $setupLogPath -Description "資料夾移除繼承")
+    $folderLockOk = $folderLockOk -and (Invoke-Icacls -Arguments @($installDir, "/remove:g", "Users", "Authenticated Users", "Everyone", $KidUsername, "/T") -LogPath $setupLogPath -Description "資料夾移除既有危險授權")
     $folderLockOk = $folderLockOk -and (Invoke-Icacls -Arguments @($installDir, "/grant", "SYSTEM:(OI)(CI)F", "/T") -LogPath $setupLogPath -Description "資料夾授權 SYSTEM")
     $folderLockOk = $folderLockOk -and (Invoke-Icacls -Arguments @($installDir, "/grant", "Administrators:(OI)(CI)F", "/T") -LogPath $setupLogPath -Description "資料夾授權 Administrators")
     $folderLockOk = $folderLockOk -and (Invoke-Icacls -Arguments @($installDir, "/grant", "Authenticated Users:(OI)(CI)RX", "/T") -LogPath $setupLogPath -Description "資料夾授權 Authenticated Users")
+    $folderLockOk = $folderLockOk -and (Test-NetGuardAclDesiredState -Path $installDir -AllowedPrincipals @("SYSTEM", "Administrators", "Authenticated Users") -LogPath $setupLogPath)
 
     foreach ($f in $sourceFiles) {
         $fp = Join-Path $installDir $f
         $folderLockOk = $folderLockOk -and (Invoke-Icacls -Arguments @($fp, "/inheritance:r") -LogPath $setupLogPath -Description "$f 移除繼承")
+        $folderLockOk = $folderLockOk -and (Invoke-Icacls -Arguments @($fp, "/remove:g", "Users", "Authenticated Users", "Everyone", $KidUsername) -LogPath $setupLogPath -Description "$f 移除既有危險授權")
         $folderLockOk = $folderLockOk -and (Invoke-Icacls -Arguments @($fp, "/grant", "SYSTEM:F") -LogPath $setupLogPath -Description "$f 授權 SYSTEM")
         $folderLockOk = $folderLockOk -and (Invoke-Icacls -Arguments @($fp, "/grant", "Administrators:F") -LogPath $setupLogPath -Description "$f 授權 Administrators")
         $folderLockOk = $folderLockOk -and (Invoke-Icacls -Arguments @($fp, "/grant", "Authenticated Users:RX") -LogPath $setupLogPath -Description "$f 授權 Authenticated Users")
+        $folderLockOk = $folderLockOk -and (Test-NetGuardAclDesiredState -Path $fp -AllowedPrincipals @("SYSTEM", "Administrators", "Authenticated Users") -LogPath $setupLogPath)
     }
     # config.json 前面已經鎖過(只給 SYSTEM/Administrators),這裡不動它,
     # 否則會被這段迴圈的 Authenticated Users:RX 覆蓋掉
@@ -254,9 +343,9 @@ if ($isKidAdmin) {
     # 那會產生「SYSTEM 執行 kid 可寫入的腳本」這種比 kid 是 admin 更難察覺的危險狀態
     # (因為畫面上會顯示「已降為標準使用者」,看起來是安全的,實際上鎖定沒生效)。
     if ($folderLockOk) {
-        Write-Host "已對 $installDir 及其內容套用 NTFS 鎖定"
+        Write-Host "已對 $installDir 及其內容套用 NTFS 鎖定(已驗證 ACL 為精確狀態)"
     } else {
-        Invoke-Rollback -Reason "NTFS 權限鎖定失敗,'$KidUsername' 可能仍可寫入 NetGuard 腳本"
+        Invoke-Rollback -Reason "NTFS 權限鎖定失敗或 ACL 驗證未通過,'$KidUsername' 可能仍可寫入 NetGuard 腳本"
         exit 1
     }
 }
