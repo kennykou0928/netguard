@@ -255,14 +255,48 @@ function Invoke-Rollback {
                 Write-Host "  警告:移除安裝目錄失敗,可能仍留有 config.json 等敏感檔案,請手動檢查並刪除 $installDir : $($_.Exception.Message)"
             }
         }
-    } elseif (-not $configJsonExistedBefore -and (Test-Path $configPath)) {
-        # 這次是覆蓋安裝(資料夾原本就存在,可能是既有正常部署),不能整個資料夾砍掉,
-        # 但至少要把「這次新建立」的 config.json 清掉,不留下 webhook 憑證
-        try {
-            Remove-Item -Path $configPath -Force -ErrorAction Stop
-            Write-Host "  已移除本次新增的 config.json(webhook 憑證)"
-        } catch {
-            Write-Host "  警告:移除 config.json 失敗,可能仍留有 webhook 憑證,請手動檢查並刪除 $configPath : $($_.Exception.Message)"
+    } elseif ($installDirExistedBefore) {
+        # 這次是覆蓋安裝(資料夾原本就存在,可能是既有正常部署)。
+        # 對應 GPT review 第四輪 P0(這輪最重要的一項):舊版 rollback 在這個分支只處理了
+        # config.json,完全沒處理被 Copy-Item -Force 覆蓋掉的舊版 .ps1——會造成「舊的 SYSTEM
+        # 排程任務還在,但執行的是這次覆蓋進去、可能沒鎖好 ACL 的新版腳本」這種危險的中間態。
+        # 現在改成:這次新建立的 config.json 一樣清掉;至於腳本,凡是覆蓋前有備份的就還原回舊版,
+        # 凡是這次才新增的檔案(舊版本裡沒有的)就直接刪除,讓磁碟上的內容回到覆蓋安裝前的狀態。
+        if (-not $configJsonExistedBefore -and (Test-Path $configPath)) {
+            try {
+                Remove-Item -Path $configPath -Force -ErrorAction Stop
+                Write-Host "  已移除本次新增的 config.json(webhook 憑證)"
+            } catch {
+                Write-Host "  警告:移除 config.json 失敗,可能仍留有 webhook 憑證,請手動檢查並刪除 $configPath : $($_.Exception.Message)"
+            }
+        }
+
+        if ($backedUpFiles.Count -gt 0) {
+            Write-Host "  正在還原覆蓋安裝前的舊版腳本..."
+            foreach ($f in $backedUpFiles.Keys) {
+                $target = Join-Path $installDir $f
+                $backup = $backedUpFiles[$f]
+                try {
+                    Copy-Item -Path $backup -Destination $target -Force -ErrorAction Stop
+                    Write-Host "    已還原舊版: $f"
+                } catch {
+                    Write-Host "    警告:還原 $f 失敗,SYSTEM 排程任務目前執行的可能是這次未完成鎖定的新版本,請手動比對 $backup 並自行還原: $($_.Exception.Message)"
+                }
+            }
+        }
+        foreach ($f in $newlyAddedFiles) {
+            $target = Join-Path $installDir $f
+            if (Test-Path $target) {
+                try {
+                    Remove-Item -Path $target -Force -ErrorAction Stop
+                    Write-Host "    已移除本次新增的檔案(舊版部署裡沒有這個檔案): $f"
+                } catch {
+                    Write-Host "    警告:移除 $f 失敗,請手動檢查: $($_.Exception.Message)"
+                }
+            }
+        }
+        if (Test-Path $backupDir) {
+            Remove-Item -Path $backupDir -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
 
@@ -272,6 +306,35 @@ function Invoke-Rollback {
 $installDirExistedBefore = Test-Path $installDir
 $configPath = Join-Path $installDir "config.json"
 $configJsonExistedBefore = Test-Path $configPath
+
+# 對應 GPT review 第四輪 P0:在用 Copy-Item -Force 覆蓋任何檔案之前,
+# 如果這是「覆蓋安裝」(資料夾原本就存在,可能有正在被 SYSTEM 排程任務使用的舊版腳本),
+# 先把每個「原本就存在」的檔案備份起來;新增的檔案(舊版沒有的)另外記錄,
+# 這樣如果之後 ACL 驗證失敗需要 rollback,才有辦法把磁碟內容還原成覆蓋安裝前的狀態,
+# 而不是讓「舊的 SYSTEM 任務」去執行「這次覆蓋進去、可能沒鎖好的新版腳本」。
+$backupDir = Join-Path $installDir ".rollback-backup"
+$backedUpFiles = @{}
+$newlyAddedFiles = @()
+
+if ($installDirExistedBefore) {
+    if (Test-Path $backupDir) { Remove-Item -Path $backupDir -Recurse -Force -ErrorAction SilentlyContinue }
+    New-Item -Path $backupDir -ItemType Directory -Force | Out-Null
+
+    foreach ($f in $sourceFiles) {
+        $existingFp = Join-Path $installDir $f
+        if (Test-Path $existingFp) {
+            $backupFp = Join-Path $backupDir $f
+            try {
+                Copy-Item -Path $existingFp -Destination $backupFp -Force -ErrorAction Stop
+                $backedUpFiles[$f] = $backupFp
+            } catch {
+                Write-Host "警告:備份舊版 $f 失敗,若這次安裝失敗將無法自動還原此檔案: $($_.Exception.Message)"
+            }
+        } else {
+            $newlyAddedFiles += $f
+        }
+    }
+}
 
 if (-not (Test-Path $installDir)) {
     New-Item -Path $installDir -ItemType Directory -Force | Out-Null
@@ -296,7 +359,7 @@ if ($WebhookUrl) {
     $lockOk = $lockOk -and (Invoke-Icacls -Arguments @($configPath, "/remove:g", "Users", "Authenticated Users", "Everyone", $KidUsername) -LogPath $setupLogPath -Description "config.json 移除既有危險授權")
     $lockOk = $lockOk -and (Invoke-Icacls -Arguments @($configPath, "/grant", "SYSTEM:F") -LogPath $setupLogPath -Description "config.json 授權 SYSTEM")
     $lockOk = $lockOk -and (Invoke-Icacls -Arguments @($configPath, "/grant", "Administrators:F") -LogPath $setupLogPath -Description "config.json 授權 Administrators")
-    $lockOk = $lockOk -and (Test-NetGuardAclDesiredState -Path $configPath -AllowedPrincipals @("SYSTEM", "Administrators") -LogPath $setupLogPath)
+    $lockOk = $lockOk -and (Test-NetGuardAclDesiredState -Path $configPath -ExpectedPermissions @{ "SYSTEM" = "FullControl"; "Administrators" = "FullControl" } -LogPath $setupLogPath)
 
     # 對應 GPT review P0 #4:config.json 裡的 webhook URL 本質上是一把「可寫入你 Discord 頻道」的
     # 憑證,ACL 鎖定失敗不能只是 warning 後繼續——那等於讓 kid 有機會讀到它、之後可以冒充 NetGuard 發訊息。
@@ -325,7 +388,7 @@ if ($isKidAdmin) {
     $folderLockOk = $folderLockOk -and (Invoke-Icacls -Arguments @($installDir, "/grant", "SYSTEM:(OI)(CI)F", "/T") -LogPath $setupLogPath -Description "資料夾授權 SYSTEM")
     $folderLockOk = $folderLockOk -and (Invoke-Icacls -Arguments @($installDir, "/grant", "Administrators:(OI)(CI)F", "/T") -LogPath $setupLogPath -Description "資料夾授權 Administrators")
     $folderLockOk = $folderLockOk -and (Invoke-Icacls -Arguments @($installDir, "/grant", "Authenticated Users:(OI)(CI)RX", "/T") -LogPath $setupLogPath -Description "資料夾授權 Authenticated Users")
-    $folderLockOk = $folderLockOk -and (Test-NetGuardAclDesiredState -Path $installDir -AllowedPrincipals @("SYSTEM", "Administrators", "Authenticated Users") -LogPath $setupLogPath)
+    $folderLockOk = $folderLockOk -and (Test-NetGuardAclDesiredState -Path $installDir -ExpectedPermissions @{ "SYSTEM" = "FullControl"; "Administrators" = "FullControl"; "Authenticated Users" = "ReadAndExecute" } -LogPath $setupLogPath)
 
     foreach ($f in $sourceFiles) {
         $fp = Join-Path $installDir $f
@@ -334,7 +397,7 @@ if ($isKidAdmin) {
         $folderLockOk = $folderLockOk -and (Invoke-Icacls -Arguments @($fp, "/grant", "SYSTEM:F") -LogPath $setupLogPath -Description "$f 授權 SYSTEM")
         $folderLockOk = $folderLockOk -and (Invoke-Icacls -Arguments @($fp, "/grant", "Administrators:F") -LogPath $setupLogPath -Description "$f 授權 Administrators")
         $folderLockOk = $folderLockOk -and (Invoke-Icacls -Arguments @($fp, "/grant", "Authenticated Users:RX") -LogPath $setupLogPath -Description "$f 授權 Authenticated Users")
-        $folderLockOk = $folderLockOk -and (Test-NetGuardAclDesiredState -Path $fp -AllowedPrincipals @("SYSTEM", "Administrators", "Authenticated Users") -LogPath $setupLogPath)
+        $folderLockOk = $folderLockOk -and (Test-NetGuardAclDesiredState -Path $fp -ExpectedPermissions @{ "SYSTEM" = "FullControl"; "Administrators" = "FullControl"; "Authenticated Users" = "ReadAndExecute" } -LogPath $setupLogPath)
     }
     # config.json 前面已經鎖過(只給 SYSTEM/Administrators),這裡不動它,
     # 否則會被這段迴圈的 Authenticated Users:RX 覆蓋掉
@@ -406,6 +469,12 @@ $actionWarn  = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoP
 $triggerWarn = New-ScheduledTaskTrigger -Daily -At 8:50PM
 $okWarn = Register-NetGuardTask -TaskName $taskWarn -Action $actionWarn -Trigger $triggerWarn -Principal $principalInteractive -Settings $settings
 if (-not $okWarn) { Invoke-Rollback -Reason "$taskWarn 建立失敗"; exit 1 }
+
+# 走到這裡代表全部 6 個排程任務都成功建立,不會再觸發 Invoke-Rollback 了,
+# 這次覆蓋安裝前備份的舊版腳本(如果有的話)可以清掉,不要一直留在磁碟上佔空間、造成混淆
+if (Test-Path $backupDir) {
+    Remove-Item -Path $backupDir -Recurse -Force -ErrorAction SilentlyContinue
+}
 
 Write-Host ""
 if ($script:UnsafeInstall) {

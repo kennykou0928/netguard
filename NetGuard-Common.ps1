@@ -50,15 +50,47 @@ function Invoke-Icacls {
     }
 }
 
+function Test-NetGuardRightsAtLevel {
+    # 對應 GPT review 第四輪 P0(這輪最重要的一項之一):用位元旗標比對實際權限,
+    # 不用字串完整比對——因為 Windows 在授予 ReadAndExecute 時,實務上常會自動多附加
+    # Synchronize 這個旗標,如果用字串精確比對「ReadAndExecute」會誤判成不符合,反而不準。
+    # 這裡改成:檢查該有的權限位元都在,且沒有任何寫入類權限位元(Write/Modify/Delete/
+    # ChangePermissions/TakeOwnership 等)混進來,才算符合預期等級。
+    param(
+        [Parameter(Mandatory=$true)]$Rights,
+        [Parameter(Mandatory=$true)][ValidateSet("FullControl", "ReadAndExecute")][string]$Level
+    )
+    $rights = [System.Security.AccessControl.FileSystemRights]$Rights
+
+    if ($Level -eq "FullControl") {
+        return (($rights -band [System.Security.AccessControl.FileSystemRights]::FullControl) -eq [System.Security.AccessControl.FileSystemRights]::FullControl)
+    }
+
+    # Level -eq "ReadAndExecute"
+    $dangerousBits = [System.Security.AccessControl.FileSystemRights]::WriteData -bor
+                      [System.Security.AccessControl.FileSystemRights]::AppendData -bor
+                      [System.Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor
+                      [System.Security.AccessControl.FileSystemRights]::WriteAttributes -bor
+                      [System.Security.AccessControl.FileSystemRights]::Delete -bor
+                      [System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor
+                      [System.Security.AccessControl.FileSystemRights]::ChangePermissions -bor
+                      [System.Security.AccessControl.FileSystemRights]::TakeOwnership
+
+    $hasReadExecute = (($rights -band [System.Security.AccessControl.FileSystemRights]::ReadAndExecute) -eq [System.Security.AccessControl.FileSystemRights]::ReadAndExecute)
+    $hasDangerousBit = (($rights -band $dangerousBits) -ne 0)
+
+    return ($hasReadExecute -and -not $hasDangerousBit)
+}
+
 function Test-NetGuardAclDesiredState {
-    # 對應 GPT review 第三輪 P1:過去的做法是「一直 /grant」,只保證這幾個 ACE 存在,
-    # 不保證「最終只剩這幾個 ACE」——如果檔案先前曾經被設定過其他授權(例如舊版部署留下的、
-    # 或重跑 Setup 覆蓋安裝時殘留的),/inheritance:r + /grant 並不會把那些舊授權清掉。
-    # 這個函式在 icacls 操作完成後讀取實際 ACL,驗證「明確授權(非繼承)的對象」
-    # 剛好等於預期清單,不多也不少,才算是真正的 desired state,而不是只驗證 icacls 沒報錯。
+    # 對應 GPT review 第三輪 P1 + 第四輪 P0:過去的做法是「一直 /grant」,只保證這幾個 ACE 存在,
+    # 不保證「最終只剩這幾個 ACE」,而且原本只檢查「是誰被授權」,沒檢查「授權了多少權限」——
+    # 例如某個對象如果不小心被授予 FullControl 而非預期的 ReadAndExecute,舊版函式仍會判定通過。
+    # 現在改成傳入 $ExpectedPermissions(對象 → 預期權限等級的對照表),
+    # 同時驗證「對象在清單內」+「權限等級剛好符合」,兩者都成立才算真正的 desired state。
     param(
         [Parameter(Mandatory=$true)][string]$Path,
-        [Parameter(Mandatory=$true)][string[]]$AllowedPrincipals,
+        [Parameter(Mandatory=$true)][hashtable]$ExpectedPermissions,
         [Parameter(Mandatory=$true)][string]$LogPath
     )
     try {
@@ -69,16 +101,19 @@ function Test-NetGuardAclDesiredState {
             if ($rule.AccessControlType -ne "Allow") { continue }
 
             $shortName = ($rule.IdentityReference.Value -split '\\')[-1]
-            $isAllowed = $false
-            foreach ($p in $AllowedPrincipals) {
-                if ($shortName -ieq $p) { $isAllowed = $true; break }
+
+            if (-not $ExpectedPermissions.ContainsKey($shortName)) {
+                $violations += "非預期的授權對象 '$($rule.IdentityReference.Value)' ($($rule.FileSystemRights))"
+                continue
             }
-            if (-not $isAllowed) {
-                $violations += "$($rule.IdentityReference.Value) ($($rule.FileSystemRights))"
+
+            $expectedLevel = $ExpectedPermissions[$shortName]
+            if (-not (Test-NetGuardRightsAtLevel -Rights $rule.FileSystemRights -Level $expectedLevel)) {
+                $violations += "'$shortName' 權限等級不符預期(預期 $expectedLevel,實際 $($rule.FileSystemRights))"
             }
         }
         if ($violations.Count -gt 0) {
-            Write-NetGuardLog -LogPath $LogPath -Message "ACL desired-state 驗證失敗,'$Path' 上偵測到非預期的授權對象: $($violations -join '; ')"
+            Write-NetGuardLog -LogPath $LogPath -Message "ACL desired-state 驗證失敗,'$Path' 上偵測到問題: $($violations -join '; ')"
             return $false
         }
         return $true
